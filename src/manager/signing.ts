@@ -1,5 +1,7 @@
 import type { Point } from '@zk-kit/baby-jubjub'
 
+import { bigIntToBuffer } from '../bytes.js'
+import { eddsaBuild } from '../eddsa/index.js'
 import { BabyFROST } from '../frost/index.js'
 import type { Bindings, Commitment } from '../frost/types.js'
 
@@ -104,6 +106,12 @@ class FROSTSigningManager {
    */
   round1 () {
     this.localBindings = []
+    // Starting a fresh round must not carry partials collected for a previous
+    // round; stale partials would otherwise be aggregated against new nonces.
+    // (remoteSigners are intentionally left intact: the documented exchange flow
+    // interleaves round1() and addRemoteSigner() across peers; use
+    // resetRoundState() to clear remote commitments between distinct rounds.)
+    this.partialsById.clear()
 
     for (const signer of this.signers) {
       const bindings = this.frost.commit(signer.skShare, BigInt(signer.id))
@@ -212,6 +220,14 @@ class FROSTSigningManager {
 
     const sigShares: bigint[] = expectedIds.map(id => this.partialsById.get(id)!)
     const sig = this.frost.aggregate(commitmentList, msgHash, this.groupPublicKey, sigShares)
+    // Only local signature shares can be checked above (verifySignatureShare needs
+    // each signer's secret share, which we hold only for local signers). A forged
+    // or malformed *remote* partial would otherwise produce an invalid aggregate
+    // returned without complaint, so verify the aggregate before handing it back.
+    // Per-signer fault attribution would require exchanging public verification
+    // shares, which this manager does not model.
+    const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(msgHash), sig, this.groupPublicKey)
+    if (!ok) throw new Error('Aggregate signature failed verification; a partial signature is invalid')
     return sig
   }
 

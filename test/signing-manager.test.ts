@@ -143,4 +143,51 @@ describe('BabyFrost Signing Manager', () => {
       assert.throws(() => signer.finalize(message))
     }
   })
+
+  it('finalize rejects a corrupted remote partial', () => {
+    const signers: FROSTSigningManager[] = []
+    for (const v of multiSigVector) {
+      const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+      signer.addSigner({ id: v.id, skShare: v.share.skShare })
+      signers.push(signer)
+    }
+    const message = 12345n
+    for (const signer of signers) {
+      signer.round1()
+      const c = signer.exportRound1()
+      for (const s of c) for (const s2 of signers) if (!s2.hasId(s.identifier)) s2.addRemoteSigner(s)
+    }
+    const partials = signers.map(s => s.sign(message))
+    for (const signer of signers) for (const p of partials) signer.receivePartials(p)
+
+    // Corrupt a remote partial held by signer 0 (local id = 1, so id 2 is remote
+    // and cannot be caught by the local-share verification). The aggregate
+    // self-check must reject it instead of returning an invalid signature.
+    signers[0]!.partialsById.set(2, 123456789n)
+    assert.throws(() => signers[0]!.finalize(message), /Aggregate signature failed verification/)
+  })
+
+  it('round1 clears partials collected for a previous round', () => {
+    const signers: FROSTSigningManager[] = []
+    for (const v of multiSigVector) {
+      const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+      signer.addSigner({ id: v.id, skShare: v.share.skShare })
+      signers.push(signer)
+    }
+    const message = 12345n
+    for (const signer of signers) {
+      signer.round1()
+      const c = signer.exportRound1()
+      for (const s of c) for (const s2 of signers) if (!s2.hasId(s.identifier)) s2.addRemoteSigner(s)
+    }
+    const partials = signers.map(s => s.sign(message))
+    for (const signer of signers) for (const p of partials) signer.receivePartials(p)
+    assert.equal(signers[0]!.readyToFinalize(), true)
+
+    // Re-running round1 must drop stale partials so they cannot be aggregated
+    // against the freshly generated nonces.
+    signers[0]!.round1()
+    assert.equal(signers[0]!.partialsById.size, 0)
+    assert.equal(signers[0]!.readyToFinalize(), false)
+  })
 })
