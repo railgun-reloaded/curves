@@ -21,6 +21,29 @@ Helper methods
 - `readyToFinalize(): boolean` — true when **every** participant in the commitment list has a partial (`getMissingPartials()` is empty). Note: the commitment list may exceed `threshold`; `finalize()` interpolates over the whole list, so all of them must sign.
 - `resetRoundState(): void` — clears commitments and partials and allows a fresh `round1()`.
 
+### Sessions (concurrent signings)
+
+Per-round state lives in a `SigningSession`. The flat methods above operate on a lazily-created `'default'` session — fine for signing one message at a time. To sign several messages concurrently on one manager (one device holding the same share(s) in multiple signings), use explicit sessions:
+
+- `startSession(id?: string): SigningSession` — create an isolated session (throws if `id` exists).
+- `session(id?: string): SigningSession` — fetch an existing session.
+- `hasSession(id?: string): boolean`, `endSession(id?: string): void`.
+
+A `SigningSession` exposes the same round methods (`round1`, `exportRound1`, `addRemoteSigner`, `sign`, `receivePartials`, `finalize`, `expectedParticipantIds`, `getMissingPartials`, `readyToFinalize`, `reset`). Sessions never share round state, so messages exchanged for one session must be routed to the matching session id on every participant.
+
+A session is single-commit: calling `round1()` twice throws (`already committed`) — call `reset()` to restart. `finalize(message)` also asserts `message` matches what `sign(message)` signed.
+
+```ts
+const a = manager.startSession('tx-42')
+a.round1()
+const myCommitments = a.exportRound1()      // route to peers' 'tx-42' sessions
+// ...collect peer commitments into a.addRemoteSigner(...)
+const partials = a.sign(messageA)            // route to peers' 'tx-42' sessions
+// ...collect peer partials into a.receivePartials(...)
+const sig = a.finalize(messageA)
+manager.endSession('tx-42')
+```
+
 ## Minimal E2E usage (t-of-n)
 
 ```ts
@@ -71,5 +94,5 @@ const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(msg), sig, groupPublicKey)
 - Keep one manager instance per participating device/process. Each instance can manage one or more local shares if needed.
 - Do not model a threshold round with a single manager plus its own exported commitments; peers must exchange commitments and partials across distinct participants.
 - Always call `round1()` before `exportRound1()` and `sign()`.
-- To sign again (new message or restart), call `resetRoundState()` and then `round1()`, and re-exchange commitments. Calling `round1()` twice without an intervening `resetRoundState()` regenerates your local nonces while peers still hold your old commitments; `sign()`/`finalize()` reject this to avoid producing invalid partials.
+- To sign again (new message or restart), either start a new session or call `resetRoundState()`/`session.reset()` and then `round1()`, and re-exchange commitments. A session is single-commit: calling `round1()` twice throws, because it would regenerate your local nonces while peers still hold your old commitments and any partial would be invalid.
 - Identifiers must be positive integers and must match identifiers assigned during DKG.

@@ -167,7 +167,7 @@ describe('BabyFrost Signing Manager', () => {
     assert.throws(() => signers[0]!.finalize(message), /Aggregate signature failed verification/)
   })
 
-  it('round1 clears partials collected for a previous round', () => {
+  it('resetRoundState clears partials so they cannot carry into a new round', () => {
     const signers: FROSTSigningManager[] = []
     for (const v of multiSigVector) {
       const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
@@ -184,10 +184,17 @@ describe('BabyFrost Signing Manager', () => {
     for (const signer of signers) for (const p of partials) signer.receivePartials(p)
     assert.equal(signers[0]!.readyToFinalize(), true)
 
-    // Re-running round1 must drop stale partials so they cannot be aggregated
-    // against the freshly generated nonces.
-    signers[0]!.round1()
+    // resetRoundState() drops stale partials so they cannot be aggregated
+    // against freshly generated nonces in a subsequent round.
+    signers[0]!.resetRoundState()
     assert.equal(signers[0]!.partialsById.size, 0)
+
+    // A fresh round + re-exchange has commitments but no partials yet.
+    signers[0]!.round1()
+    for (const signer of signers) {
+      const c = signer.exportRound1()
+      for (const s of c) if (!signers[0]!.hasId(s.identifier)) signers[0]!.addRemoteSigner(s)
+    }
     assert.equal(signers[0]!.readyToFinalize(), false)
   })
 
@@ -224,33 +231,19 @@ describe('BabyFrost Signing Manager', () => {
     assert(ok, 'aggregate over full participant set must verify')
   })
 
-  it('sign rejects a second round1 without resetRoundState (stale local nonces)', () => {
-    const signers: FROSTSigningManager[] = []
-    for (const v of multiSigVector) {
-      const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
-      signer.addSigner({ id: v.id, skShare: v.share.skShare })
-      signers.push(signer)
-    }
-    const message = 12345n
-    for (const signer of signers) {
-      signer.round1()
-      const c = signer.exportRound1()
-      for (const s of c) for (const s2 of signers) if (!s2.hasId(s.identifier)) s2.addRemoteSigner(s)
-    }
+  it('round1 rejects re-committing a session without reset', () => {
+    const v = multiSigVector[0]!
+    const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+    signer.addSigner({ id: v.id, skShare: v.share.skShare })
 
-    // Start a fresh round on signer 0 but forget to resetRoundState(): its local
-    // nonces are regenerated while the remote commitments are now a round behind.
-    signers[0]!.round1()
-    assert.throws(() => signers[0]!.sign(message), /without resetRoundState/)
+    signer.round1()
+    // A second round1() would regenerate local nonces while peers still hold the
+    // previous commitments; the session must reject it.
+    assert.throws(() => signer.round1(), /already committed/)
 
-    // The documented recovery path clears the round and re-exchanges.
-    signers[0]!.resetRoundState()
-    signers[0]!.round1()
-    for (const signer of signers) {
-      const c = signer.exportRound1()
-      for (const s of c) if (!signers[0]!.hasId(s.identifier)) signers[0]!.addRemoteSigner(s)
-    }
-    assert.doesNotThrow(() => signers[0]!.sign(message))
+    // reset() (here via the flat wrapper) is the documented restart path.
+    signer.resetRoundState()
+    assert.doesNotThrow(() => signer.round1())
   })
 
   it('addSigner rejects a duplicate identifier', () => {
@@ -258,5 +251,67 @@ describe('BabyFrost Signing Manager', () => {
     const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
     signer.addSigner({ id: v.id, skShare: v.share.skShare })
     assert.throws(() => signer.addSigner({ id: v.id, skShare: v.share.skShare }), /already added/)
+  })
+
+  it('finalize rejects a message different from the one signed', () => {
+    const signers: FROSTSigningManager[] = []
+    for (const v of multiSigVector) {
+      const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+      signer.addSigner({ id: v.id, skShare: v.share.skShare })
+      signers.push(signer)
+    }
+    for (const signer of signers) {
+      signer.round1()
+      const c = signer.exportRound1()
+      for (const s of c) for (const s2 of signers) if (!s2.hasId(s.identifier)) s2.addRemoteSigner(s)
+    }
+    const partials = signers.map(s => s.sign(12345n))
+    for (const signer of signers) for (const p of partials) signer.receivePartials(p)
+    assert.throws(() => signers[0]!.finalize(99999n), /does not match the message signed/)
+  })
+
+  it('drives two concurrent sessions on one manager without interference', () => {
+    // Each participant runs sessions 'A' and 'B' on a single manager, signing
+    // two different messages. The sessions must not leak state into each other.
+    const managers: FROSTSigningManager[] = []
+    for (const v of multiSigVector) {
+      const m = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+      m.addSigner({ id: v.id, skShare: v.share.skShare })
+      managers.push(m)
+    }
+
+    /**
+     * Drive one full signing session end-to-end on every manager.
+     * @param sessionId Session identifier to run on each manager.
+     * @param message Message scalar to sign in this session.
+     * @returns The verified aggregate signature.
+     */
+    const runSession = (sessionId: string, message: bigint) => {
+      const sessions = managers.map(m => m.startSession(sessionId))
+      for (let i = 0; i < sessions.length; i++) {
+        sessions[i]!.round1()
+        const c = sessions[i]!.exportRound1()
+        for (const cm of c) {
+          for (let j = 0; j < sessions.length; j++) {
+            if (!managers[j]!.hasId(cm.identifier)) sessions[j]!.addRemoteSigner(cm)
+          }
+        }
+      }
+      const partials = sessions.map(s => s.sign(message))
+      for (const s of sessions) for (const p of partials) s.receivePartials(p)
+      const sig = sessions[0]!.finalize(message)
+      const ok = eddsaBuild.verifyPoseidon(managers[0]!.frost.toBytes(message).toReversed(), sig, managers[0]!.groupPublicKey)
+      assert(ok, `session ${sessionId} signature must verify`)
+      return sig
+    }
+
+    const sigA = runSession('A', 11111n)
+    const sigB = runSession('B', 22222n)
+    // Distinct messages must yield distinct aggregate signatures.
+    assert.notDeepStrictEqual(sigA, sigB)
+    // Both sessions remain independently retrievable on each manager.
+    for (const m of managers) {
+      assert.ok(m.hasSession('A') && m.hasSession('B'))
+    }
   })
 })
