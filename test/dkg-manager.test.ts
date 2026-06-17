@@ -299,4 +299,62 @@ describe('DKGManager e2e flow test', () => {
       'finalize must reject a share inconsistent with the dealer commitments'
     )
   })
+
+  it('coordinator-less flow: survives a JSON snapshot/restore mid-flow', () => {
+    const threshold = 3
+    const secrets = [0x11n, 0x22n, 0x33n, 0x44n, 0x55n]
+    let dealers: DKGManager[] = []
+
+    const announcements: Uint8Array[] = []
+    for (let i = 0; i < secrets.length; i++) {
+      const d = new DKGManager('test-participant-1')
+      dealers.push(d)
+      announcements.push(d.getAnnouncement().pubKey)
+    }
+    const roster: Record<number, Uint8Array> = {}
+    announcements.forEach((a, idx) => { roster[idx + 1] = a })
+
+    // commitment round; the dealer's own commitment now flows through the same
+    // addParticipantCommitments path as every peer's (no internal self-add).
+    const commitmentsByDealer: Record<number, ReturnType<DKGManager['commitmentRound']>['commitments']> = {}
+    dealers.forEach((dealer, idx) => {
+      dealer.assignRoster(roster)
+      const { commitments } = dealer.commitmentRound(secrets[idx]!, secrets.length, threshold)
+      commitmentsByDealer[idx + 1] = commitments
+    })
+    dealers.forEach((dealer) => {
+      for (const idStr in commitmentsByDealer) dealer.addParticipantCommitments(Number(idStr), commitmentsByDealer[Number(idStr)]!)
+    })
+
+    // every dealer reports a fully-collected commitment set and nothing awaited
+    dealers.forEach((dealer) => {
+      const p = dealer.progress()
+      assert.strictEqual(p.state, 'commitments-collected')
+      assert.deepStrictEqual(p.awaitingCommitments, [])
+    })
+
+    // Serialize each manager to JSON and rebuild from the parsed snapshot,
+    // simulating a process restart in the middle of the flow.
+    dealers = dealers.map((d) => DKGManager.fromJSON(JSON.parse(JSON.stringify(d))))
+
+    // restored managers continue the flow seamlessly
+    const encryptedByDealerId: Record<number, ReturnType<DKGManager['getEncryptedShares']>> = {}
+    dealers.forEach((dealer, idx) => { encryptedByDealerId[idx + 1] = dealer.getEncryptedShares() })
+    dealers.forEach((dealer) => {
+      for (const idStr in encryptedByDealerId) dealer.addEncryptedShares(Number(idStr), encryptedByDealerId[Number(idStr)]!)
+    })
+
+    const finalized = dealers.map((d) => d.finalize())
+    const refPK = finalized[0]!.PKGroup
+    finalized.forEach((r, idx) => {
+      assert.strictEqual(r.share.id, idx + 1)
+      assert.ok(r.share.skShare !== 0n)
+      assert.deepStrictEqual(r.PKGroup, refPK)
+      assert.strictEqual(r.share.id !== undefined, true)
+    })
+
+    // a restored, finalized manager round-trips again with identical state
+    const reFinal = DKGManager.fromJSON(JSON.parse(JSON.stringify(dealers[0])))
+    assert.strictEqual(reFinal.getState(), 'finalized')
+  })
 })

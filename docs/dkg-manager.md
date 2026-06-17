@@ -19,9 +19,17 @@ This README covers the public API, step-by-step usage, and common errors. The co
 - `addEncryptedShares(dealerId: number, shares: Record<number, EncryptedShare>): void`
 - `finalize()` → `{ share: { id, skShare, skShareDiv8 }, PKGroup, viewingPrivateKey }`
 
+Coordination & persistence
+- `getState(): DKGFlowState` — current flow state, derived from collected data (never tracked imperatively).
+- `progress()` → `{ state, awaitingCommitments: number[], awaitingEncryptedShares: number[] }` — what this participant is still waiting on from peers.
+- `missingCommitments(): number[]` / `missingEncryptedShares(): number[]` — outstanding roster ids per dimension.
+- `toJSON(): DKGSnapshot` — JSON-safe, versioned snapshot for pause/resume. **Contains secret material** (this participant's communication key and any decrypted local shares); store only in trusted storage.
+- `static DKGManager.fromJSON(snapshot): DKGManager` — rebuild a manager and continue the flow across a process restart.
+
 Notes
 - Participant IDs are 1..N positive integers.
 - Shares and commitments must be provided for every dealer in the roster before finalizing.
+- `commitmentRound` produces only — it does **not** auto-store your own commitment. Feed the returned `commitments` back through `addParticipantCommitments` for your own id, exactly as you do for every peer dealer.
 
 ## Flow 1: Trusted-dealer keygen
 
@@ -61,14 +69,17 @@ dealer.assignRoster(roster) // assigns dealer.participantID implicitly based on 
 2. Commitment round (per dealer)
 ```ts
 const { shares, commitments } = dealer.commitmentRound(secret_i, n, t)
-// Broadcast `commitments` to everyone; keep `shares` to encrypt next
+// Broadcast `commitments` to everyone; keep `shares` to encrypt next.
+// `commitmentRound` does not store your own commitment — add it like any peer's
+// in the collection step below (your id is included in `allCommitments`).
 ```
 
-3. Collect commitments
+3. Collect commitments (your own included)
 ```ts
 for (const [dealerId, comms] of Object.entries(allCommitments)) {
   dealer.addParticipantCommitments(Number(dealerId), comms)
 }
+// dealer.progress().awaitingCommitments lists any roster ids still missing
 ```
 
 4. Encrypt and distribute shares (per dealer)
@@ -96,6 +107,23 @@ Validation and ordering
 - `getEncryptedShares` requires a complete commitment set and local shares from `commitmentRound`.
 - `addEncryptedShares` must be called for all dealers in roster.
 - `finalize` throws if any dealers are missing.
+
+## Pause and resume
+
+A session can be persisted between any two steps and rebuilt later (e.g. across a
+process restart). State is derived from the collected data, so a restored manager
+resumes exactly where it left off.
+
+```ts
+// persist (snapshot is JSON-serializable; treat it as secret)
+const snapshot = dealer.toJSON()
+await store.put(sessionId, JSON.stringify(snapshot))
+
+// ...later, in a fresh process
+const restored = DKGManager.fromJSON(JSON.parse(await store.get(sessionId)))
+restored.getState() // resumes at the same flow state
+restored.getEncryptedShares() // continue the flow
+```
 
 ## Error messages and causes
 

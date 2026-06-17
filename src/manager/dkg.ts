@@ -1,7 +1,7 @@
 import {
   x25519
 } from '@noble/curves/ed25519.js'
-import { randomBytes } from '@noble/hashes/utils.js'
+import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js'
 import { bytesToBigInt } from '@railgun-reloaded/bytes'
 import type { Point } from '@zk-kit/baby-jubjub'
 
@@ -22,10 +22,52 @@ enum DKGFlowState {
 }
 
 /**
+ * Local pipeline progress — the steps *this* participant has performed.
+ *
+ * This is deliberately separate from collection progress (which dealer
+ * commitments / encrypted shares have arrived). Those are two independent
+ * dimensions of a DKG round: a dealer produces its own artifacts while
+ * concurrently receiving peers', and peer messages arrive out of order.
+ * Tracking them separately and deriving the linear {@link DKGFlowState} on
+ * demand keeps a single source of truth and avoids lockstep assumptions.
+ */
+interface DKGSteps {
+  rosterAssigned: boolean
+  selfCommitmentsCreated: boolean
+  selfSharesEncrypted: boolean
+  finalized: boolean
+}
+
+const SNAPSHOT_VERSION = 1
+
+/**
+ * JSON-safe, resumable snapshot of a {@link DKGManager}.
+ *
+ * All binary and bigint fields are hex-encoded so the object round-trips
+ * through `JSON.stringify`/`JSON.parse`. NOTE: this contains the participant's
+ * secret communication key and decrypted local shares — treat it as secret.
+ */
+interface DKGSnapshot {
+  version: number
+  name: string
+  secretComKey: string
+  participantID?: number | undefined
+  roster: Record<number, string>
+  keysByID: Record<number, string>
+  shares: Record<number, string>
+  recipientIds: number[]
+  encryptedShares: Record<number, Record<number, { nonce: string; ciphertext: string }>>
+  commitmentsByDealerId: Record<number, [string, string][]>
+  steps: DKGSteps
+}
+
+/**
  * Stateful orchestration helper for trusted-dealer and coordinator-less DKG.
  *
  * Instances are single-flow helpers. Recreate them for new sessions instead of
- * trying to reuse finalized state.
+ * trying to reuse finalized state. In-progress sessions can be persisted and
+ * resumed across process restarts via {@link DKGManager#toJSON} and
+ * {@link DKGManager.fromJSON}.
  */
 class DKGManager {
   /** Human-readable participant name used in announcements. */
@@ -51,8 +93,16 @@ class DKGManager {
   /** Public commitment vectors keyed by dealer id. */
   private commitmentsByDealerId: Record<number, Point<bigint>[]> = {}
 
-  /** Current orchestration state guarding call ordering. */
-  private state: DKGFlowState = DKGFlowState.Init
+  /**
+   * Local pipeline progress. Collection progress lives in the maps above and is
+   * queried via rosterCovers(); the linear state is derived from both.
+   */
+  private steps: DKGSteps = {
+    rosterAssigned: false,
+    selfCommitmentsCreated: false,
+    selfSharesEncrypted: false,
+    finalized: false,
+  }
 
   /** Monotonic ordering used to compare flow states. */
   private readonly stateOrder: Record<DKGFlowState, number> = {
@@ -65,15 +115,97 @@ class DKGManager {
     [DKGFlowState.Finalized]: 6,
   }
 
+  // --- derived-state selectors ---------------------------------------------
+
+  /**
+   * Roster participant ids in ascending order.
+   * @returns The roster ids, sorted ascending.
+   */
+  private sortedRosterIds (): number[] {
+    return Object.keys(this.roster || {}).map(Number).sort((a, b) => a - b)
+  }
+
+  /**
+   * Reports whether a per-dealer map has exactly one entry per roster id.
+   * @param map Map keyed by dealer/participant id to test for completeness.
+   * @returns True when the map covers the full roster (a complete set).
+   */
+  private rosterCovers (map: Record<number, unknown>): boolean {
+    const rosterIds = this.sortedRosterIds()
+    if (!rosterIds.length) return false
+    const ids = Object.keys(map).map(Number).sort((a, b) => a - b)
+    return ids.length === rosterIds.length && rosterIds.every((id, i) => id === ids[i])
+  }
+
+  /**
+   * Lists peers whose dealer commitments are still outstanding.
+   * @returns Roster ids whose dealer commitments have not yet been collected.
+   */
+  missingCommitments (): number[] {
+    return this.sortedRosterIds().filter((id) => !this.commitmentsByDealerId[id])
+  }
+
+  /**
+   * Lists peers whose encrypted-share bundles are still outstanding.
+   * @returns Roster ids whose encrypted-share bundles have not yet been collected.
+   */
+  missingEncryptedShares (): number[] {
+    return this.sortedRosterIds().filter((id) => !this.encryptedShares[id])
+  }
+
+  /**
+   * Reports whether every roster member's dealer commitments have arrived.
+   * @returns True once the commitment set covers the full roster.
+   */
+  private commitmentsComplete (): boolean { return this.rosterCovers(this.commitmentsByDealerId) }
+
+  /**
+   * Reports whether every roster member's encrypted share bundle has arrived.
+   * @returns True once the encrypted-share set covers the full roster.
+   */
+  private encryptedSharesComplete (): boolean { return this.rosterCovers(this.encryptedShares) }
+
+  /**
+   * Projects the two progress dimensions onto the legacy linear flow state.
+   * State is derived from data, never assigned imperatively, so collection of
+   * the final commitment/share automatically advances the reported state.
+   * @returns The current DKG flow state.
+   */
+  getState (): DKGFlowState {
+    if (this.steps.finalized) return DKGFlowState.Finalized
+    if (this.encryptedSharesComplete()) return DKGFlowState.EncryptedSharesCollected
+    if (this.steps.selfSharesEncrypted) return DKGFlowState.SharesEncrypted
+    if (this.commitmentsComplete()) return DKGFlowState.CommitmentsCollected
+    if (this.steps.selfCommitmentsCreated) return DKGFlowState.CommitmentsCreated
+    if (this.steps.rosterAssigned) return DKGFlowState.RosterAssigned
+    return DKGFlowState.Init
+  }
+
+  /**
+   * Coordination snapshot for UIs and protocol drivers: the derived state plus
+   * exactly what this participant is still waiting on from peers.
+   * @returns Current state and the roster ids with outstanding artifacts.
+   */
+  progress () {
+    return {
+      state: this.getState(),
+      awaitingCommitments: this.missingCommitments(),
+      awaitingEncryptedShares: this.missingEncryptedShares(),
+    }
+  }
+
+  // --- guards ---------------------------------------------------------------
+
   /**
    * Throws unless the current state is one of the allowed states.
    * @param where Caller name used in the error message.
    * @param allowed States permitted for the calling operation.
    */
   private ensureStateIn (where: string, allowed: DKGFlowState[]) {
-    if (!allowed.includes(this.state)) {
+    const state = this.getState()
+    if (!allowed.includes(state)) {
       const allowedStr = allowed.join('|')
-      throw new Error(`${where} invalid state: ${this.state}; allowed: ${allowedStr}`)
+      throw new Error(`${where} invalid state: ${state}; allowed: ${allowedStr}`)
     }
   }
 
@@ -83,16 +215,11 @@ class DKGManager {
    * @param min Minimum state required for the calling operation.
    */
   private ensureStateAtLeast (where: string, min: DKGFlowState) {
-    if (this.stateOrder[this.state] < this.stateOrder[min]) {
-      throw new Error(`${where} requires state >= ${min}, current=${this.state}`)
+    const state = this.getState()
+    if (this.stateOrder[state] < this.stateOrder[min]) {
+      throw new Error(`${where} requires state >= ${min}, current=${state}`)
     }
   }
-
-  /**
-   * Returns the current orchestration state for UI or protocol coordination.
-   * @returns The current DKG flow state.
-   */
-  getState () { return this.state }
 
   /**
    * Returns every dealer's commitment vector ordered by dealer id.
@@ -101,17 +228,11 @@ class DKGManager {
   private getAllDealerCommitments (): Point<bigint>[][] {
     // must have collected complete commitments set
     this.ensureStateAtLeast('getAllDealerCommitments', DKGFlowState.CommitmentsCollected)
-    const rosterIds = Object.keys(this.roster || {}).map(Number).sort((a, b) => a - b)
-    if (!rosterIds.length) throw new Error('roster not assigned')
+    if (!this.sortedRosterIds().length) throw new Error('roster not assigned')
+    if (!Object.keys(this.commitmentsByDealerId).length) throw new Error('no dealer commitments have been added')
+    if (!this.commitmentsComplete()) throw new Error('missing commitments for one or more dealers')
 
-    const ids = Object.keys(this.commitmentsByDealerId).map(Number).sort((a, b) => a - b)
-    if (ids.length === 0) throw new Error('no dealer commitments have been added')
-    if (ids.length !== rosterIds.length || ids.some((id, i) => id !== rosterIds[i])) {
-      throw new Error('missing commitments for one or more dealers')
-    }
-    const ordered: Point<bigint>[][] = []
-    for (const id of ids) ordered.push(this.commitmentsByDealerId[id]!)
-    return ordered
+    return this.sortedRosterIds().map((id) => this.commitmentsByDealerId[id]!)
   }
 
   /**
@@ -127,6 +248,124 @@ class DKGManager {
     // this will be announced with public commitments
     this.pubComKey = this.getPublicKey(this.secretComKey)
     this.roster = {}
+  }
+
+  // --- persistence ----------------------------------------------------------
+
+  /**
+   * Serializes the in-progress (or finalized) session to a JSON-safe snapshot.
+   *
+   * The snapshot includes secret material (this participant's communication key
+   * and any decrypted local shares); persist it only to trusted storage.
+   * @returns A versioned, hex-encoded snapshot suitable for JSON.stringify.
+   */
+  toJSON (): DKGSnapshot {
+    /**
+     * Hex-encodes a bigint for the snapshot.
+     * @param v Value to encode.
+     * @returns The 0x-prefixed hex encoding.
+     */
+    const bigHex = (v: bigint) => '0x' + v.toString(16)
+    /**
+     * Hex-encodes every byte array in an id-keyed record.
+     * @param rec Record of id to bytes.
+     * @returns The same record with hex-encoded values.
+     */
+    const bytesRecord = (rec: Record<number, Uint8Array>) => {
+      const out: Record<number, string> = {}
+      for (const id in rec) out[id] = bytesToHex(rec[id]!)
+      return out
+    }
+
+    const shares: Record<number, string> = {}
+    for (const id in this.shares) shares[id] = bigHex(this.shares[id]!)
+
+    const encryptedShares: DKGSnapshot['encryptedShares'] = {}
+    for (const dealerId in this.encryptedShares) {
+      const bundle = this.encryptedShares[dealerId]!
+      const outBundle: Record<number, { nonce: string; ciphertext: string }> = {}
+      for (const rid in bundle) {
+        const e = bundle[rid]!
+        outBundle[rid] = { nonce: bytesToHex(e.nonce), ciphertext: bytesToHex(e.ciphertext) }
+      }
+      encryptedShares[dealerId] = outBundle
+    }
+
+    const commitmentsByDealerId: DKGSnapshot['commitmentsByDealerId'] = {}
+    for (const dealerId in this.commitmentsByDealerId) {
+      commitmentsByDealerId[dealerId] = this.commitmentsByDealerId[dealerId]!.map(
+        (pt) => [bigHex(pt[0]), bigHex(pt[1])] as [string, string]
+      )
+    }
+
+    return {
+      version: SNAPSHOT_VERSION,
+      name: this.name,
+      secretComKey: bytesToHex(this.secretComKey),
+      participantID: this.participantID,
+      roster: bytesRecord(this.roster),
+      keysByID: bytesRecord(this.keysByID),
+      shares,
+      recipientIds: [...this.recipientIds],
+      encryptedShares,
+      commitmentsByDealerId,
+      steps: { ...this.steps },
+    }
+  }
+
+  /**
+   * Rebuilds a manager from a snapshot produced by {@link DKGManager#toJSON}.
+   * @param snapshot A snapshot at the current SNAPSHOT_VERSION.
+   * @returns A manager restored to the snapshot's exact orchestration state.
+   */
+  static fromJSON (snapshot: DKGSnapshot): DKGManager {
+    if (!snapshot || snapshot.version !== SNAPSHOT_VERSION) {
+      throw new Error(`unsupported DKG snapshot version: ${snapshot?.version}`)
+    }
+    const mgr = new DKGManager(snapshot.name, hexToBytes(snapshot.secretComKey))
+    mgr.participantID = snapshot.participantID
+
+    /**
+     * Decodes every hex string in an id-keyed record back to bytes.
+     * @param rec Record of id to hex string.
+     * @returns The same record with decoded byte values.
+     */
+    const bytesRecord = (rec: Record<number, string>) => {
+      const out: Record<number, Uint8Array> = {}
+      for (const id in rec) out[id] = hexToBytes(rec[id]!)
+      return out
+    }
+    mgr.roster = bytesRecord(snapshot.roster)
+    mgr.keysByID = bytesRecord(snapshot.keysByID)
+
+    const shares: Record<number, bigint> = {}
+    for (const id in snapshot.shares) shares[id] = BigInt(snapshot.shares[id]!)
+    mgr.shares = shares
+
+    mgr.recipientIds = [...snapshot.recipientIds]
+
+    const encryptedShares: Record<number, Record<number, EncryptedShare>> = {}
+    for (const dealerId in snapshot.encryptedShares) {
+      const bundle = snapshot.encryptedShares[dealerId]!
+      const outBundle: Record<number, EncryptedShare> = {}
+      for (const rid in bundle) {
+        const e = bundle[rid]!
+        outBundle[rid] = { nonce: hexToBytes(e.nonce), ciphertext: hexToBytes(e.ciphertext) }
+      }
+      encryptedShares[dealerId] = outBundle
+    }
+    mgr.encryptedShares = encryptedShares
+
+    const commitmentsByDealerId: Record<number, Point<bigint>[]> = {}
+    for (const dealerId in snapshot.commitmentsByDealerId) {
+      commitmentsByDealerId[dealerId] = snapshot.commitmentsByDealerId[dealerId]!.map(
+        (pt) => [BigInt(pt[0]), BigInt(pt[1])] as Point<bigint>
+      )
+    }
+    mgr.commitmentsByDealerId = commitmentsByDealerId
+
+    mgr.steps = { ...snapshot.steps }
+    return mgr
   }
 
   /**
@@ -204,11 +443,14 @@ class DKGManager {
       this.keysByID[id] = shared
     }
     if (!matchedSelf) throw new Error('our announcement pubKey not present in roster')
-    this.state = DKGFlowState.RosterAssigned
+    this.steps.rosterAssigned = true
   }
 
   /**
    * Generates local polynomial commitments and dealer shares for a DKG round.
+   * Produces only — the caller broadcasts the returned commitments and feeds
+   * them back through {@link DKGManager#addParticipantCommitments}, exactly as
+   * it does for every peer dealer (one uniform collection path).
    * @param secret Dealer secret used as the constant polynomial term.
    * @param desiredShares Total number of participants expected in the roster.
    * @param threshold Minimum number of shares required by the DKG.
@@ -233,8 +475,7 @@ class DKGManager {
     this.recipientIds = recipientIds
     const shares = this.dkg.computeSharesForIds(coefficients, recipientIds)
     this.shares = shares
-    this.state = DKGFlowState.CommitmentsCreated
-    this.addParticipantCommitments(this.participantID!, commitments)
+    this.steps.selfCommitmentsCreated = true
     return { shares, commitments }
   }
 
@@ -247,13 +488,8 @@ class DKGManager {
     this.ensureStateIn('addParticipantCommitments', [DKGFlowState.CommitmentsCreated, DKGFlowState.CommitmentsCollected])
     if (!Number.isInteger(participantID) || participantID <= 0) throw new Error('bad participant id for commitments')
     if (!participantCommitments?.length) throw new Error('empty commitments from participant')
+    // State advances automatically once this completes the set (see getState).
     this.commitmentsByDealerId[participantID] = participantCommitments
-    // If roster is known and we have a full set of commitments, advance state
-    const rosterIds = Object.keys(this.roster || {}).map(Number).sort((a, b) => a - b)
-    const commitIds = Object.keys(this.commitmentsByDealerId).map(Number).sort((a, b) => a - b)
-    if (rosterIds.length && rosterIds.length === commitIds.length && rosterIds.every((id, i) => id === commitIds[i])) {
-      this.state = DKGFlowState.CommitmentsCollected
-    }
   }
 
   /**
@@ -265,19 +501,10 @@ class DKGManager {
     this.ensureStateAtLeast('addEncryptedShares', DKGFlowState.CommitmentsCollected)
     if (!Number.isInteger(participantID) || participantID <= 0) throw new Error('bad dealer id for encrypted shares')
     if (!shares || typeof shares !== 'object') throw new Error('invalid encrypted shares bundle')
-    // Basic validation for our expected entry if we know our id
-    if (typeof this.participantID !== 'undefined') {
-      const mine = shares[this.participantID]
-      if (!mine || !(mine.nonce instanceof Uint8Array) || !(mine.ciphertext instanceof Uint8Array)) {
-        // Allow storing anyway, but surface a strong error when decrypting
-      }
-    }
+    // Malformed entries are tolerated here and surface a strong error at decrypt
+    // time (getDecryptedShares). State advances automatically once this
+    // completes the set (see getState).
     this.encryptedShares[participantID] = shares
-    const rosterIds = Object.keys(this.roster || {}).map(Number).sort((a, b) => a - b)
-    const encIds = Object.keys(this.encryptedShares).map(Number).sort((a, b) => a - b)
-    if (rosterIds.length && rosterIds.length === encIds.length && rosterIds.every((id, i) => id === encIds[i])) {
-      this.state = DKGFlowState.EncryptedSharesCollected
-    }
   }
 
   /**
@@ -296,7 +523,7 @@ class DKGManager {
       if (!k || k.length !== 32) throw new Error(`missing shared key for participant ${id}`)
     }
     const out = this.dkg.encryptSharesAESGCMWithAAD(this.shares, this.keysByID, allDealerCommitments)
-    this.state = DKGFlowState.SharesEncrypted
+    this.steps.selfSharesEncrypted = true
     return out
   }
 
@@ -362,7 +589,7 @@ class DKGManager {
     }
     const allDealerCommitments = this.getAllDealerCommitments()
     const res = this.dkg.finalizeParticipant(this.participantID, shares, allDealerCommitments)
-    this.state = DKGFlowState.Finalized
+    this.steps.finalized = true
     return res
   }
 
@@ -388,3 +615,4 @@ class DKGManager {
 }
 
 export { DKGManager, DKGFlowState }
+export type { DKGSnapshot }
