@@ -33,6 +33,22 @@ A `SigningSession` exposes the same round methods (`round1`, `exportRound1`, `ad
 
 A session is single-commit: calling `round1()` twice throws (`already committed`) — call `reset()` to restart. `finalize(message)` also asserts `message` matches what `sign(message)` signed.
 
+### Pause and resume
+
+A signing manager and all of its sessions can be serialized between any two steps and rebuilt later (e.g. across a process restart). The restored manager keeps the **same local nonces**, so partials it produces still match the commitments peers already hold.
+
+- `toJSON(): SigningManagerSnapshot` — versioned, JSON-serializable snapshot. **Contains secret material** (signer shares and local nonces); store only in trusted storage.
+- `static FROSTSigningManager.fromJSON(snapshot): FROSTSigningManager` — rebuild the manager and every session.
+
+```ts
+// persist after exchanging commitments (treat the snapshot as secret)
+await store.put(id, JSON.stringify(manager))   // toJSON() is invoked by JSON.stringify
+
+// ...later, in a fresh process
+const restored = FROSTSigningManager.fromJSON(JSON.parse(await store.get(id)))
+const partials = restored.sign(message)        // continue the flow
+```
+
 ```ts
 const a = manager.startSession('tx-42')
 a.round1()

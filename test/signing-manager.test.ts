@@ -314,4 +314,39 @@ describe('BabyFrost Signing Manager', () => {
       assert.ok(m.hasSession('A') && m.hasSession('B'))
     }
   })
+
+  it('survives a JSON snapshot/restore mid signing flow', () => {
+    let signers: FROSTSigningManager[] = []
+    for (const v of multiSigVector) {
+      const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+      signer.addSigner({ id: v.id, skShare: v.share.skShare })
+      signers.push(signer)
+    }
+    const message = 12345n
+
+    // round 1 + commitment exchange
+    for (const signer of signers) {
+      signer.round1()
+      const c = signer.exportRound1()
+      for (const s of c) for (const s2 of signers) if (!s2.hasId(s.identifier)) s2.addRemoteSigner(s)
+    }
+
+    // Snapshot after commitments are exchanged but before any partials, then
+    // rebuild from the parsed JSON — simulating a process restart mid-flow. The
+    // restored managers must keep the SAME local nonces, or the partials they
+    // produce won't match the commitments their peers already hold.
+    signers = signers.map((s) => FROSTSigningManager.fromJSON(JSON.parse(JSON.stringify(s))))
+
+    // round 2 continues on the restored managers
+    const partials = signers.map((s) => s.sign(message))
+    for (const signer of signers) for (const p of partials) signer.receivePartials(p)
+
+    const sig = signers[0]!.finalize(message)
+    const ok = eddsaBuild.verifyPoseidon(signers[0]!.frost.toBytes(message).toReversed(), sig, signers[0]!.groupPublicKey)
+    assert(ok, 'signature from restored managers must verify')
+
+    // a restored session reports its collected partials and stays finalizable
+    const reloaded = FROSTSigningManager.fromJSON(JSON.parse(JSON.stringify(signers[0])))
+    assert.equal(reloaded.readyToFinalize(), true)
+  })
 })

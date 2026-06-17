@@ -9,7 +9,87 @@ type SignerShare = { id: number; skShare: bigint }
 type SessionBinding = { bindings: Bindings, share: SignerShare }
 type PartialSignature = { identifier: number, partial: bigint }
 
+/** Hex-encoded `[x, y]` curve point. */
+type HexPoint = [string, string]
+
+/** JSON-safe form of a FROST round-1 commitment. */
+interface CommitmentSnapshot {
+  identifier: string
+  hidingNonceCommitment: HexPoint
+  bindingNonceCommitment: HexPoint
+}
+
+/** JSON-safe form of a local signer's round-1 bindings (includes secret nonces). */
+interface SessionBindingSnapshot {
+  nonces: { hidingNonce: string; bindingNonce: string }
+  commitments: CommitmentSnapshot
+  share: { id: number; skShare: string }
+}
+
+/** JSON-safe snapshot of a single {@link SigningSession}. */
+interface SigningSessionSnapshot {
+  id: string
+  committed: boolean
+  message?: string | undefined
+  localBindings: SessionBindingSnapshot[]
+  remoteSigners: CommitmentSnapshot[]
+  partials: Array<[number, string]>
+}
+
+/**
+ * JSON-safe, resumable snapshot of a {@link FROSTSigningManager} and all its
+ * sessions. NOTE: contains secret material (signer shares and local nonces);
+ * treat it as secret.
+ */
+interface SigningManagerSnapshot {
+  version: number
+  threshold: number
+  groupPublicKey: HexPoint
+  signers: Array<{ id: number; skShare: string }>
+  sessions: SigningSessionSnapshot[]
+}
+
 const DEFAULT_SESSION = 'default'
+const SNAPSHOT_VERSION = 1
+
+/**
+ * Hex-encodes a bigint for a snapshot.
+ * @param v Value to encode.
+ * @returns The 0x-prefixed hex encoding.
+ */
+const bigToHex = (v: bigint) => '0x' + v.toString(16)
+/**
+ * Hex-encodes a curve point for a snapshot.
+ * @param p Point to encode.
+ * @returns The point as an [x, y] hex pair.
+ */
+const pointToHex = (p: Point<bigint>): HexPoint => [bigToHex(p[0]), bigToHex(p[1])]
+/**
+ * Decodes a snapshot [x, y] hex pair back into a curve point.
+ * @param h Hex pair to decode.
+ * @returns The decoded point.
+ */
+const hexToPoint = (h: HexPoint): Point<bigint> => [BigInt(h[0]), BigInt(h[1])]
+/**
+ * Converts a round-1 commitment into its JSON-safe snapshot form.
+ * @param c Commitment to encode.
+ * @returns The hex-encoded commitment snapshot.
+ */
+const commitmentToSnapshot = (c: Commitment): CommitmentSnapshot => ({
+  identifier: bigToHex(c.identifier),
+  hidingNonceCommitment: pointToHex(c.hidingNonceCommitment),
+  bindingNonceCommitment: pointToHex(c.bindingNonceCommitment),
+})
+/**
+ * Rebuilds a round-1 commitment from its snapshot form.
+ * @param s Commitment snapshot to decode.
+ * @returns The decoded commitment.
+ */
+const snapshotToCommitment = (s: CommitmentSnapshot): Commitment => ({
+  identifier: BigInt(s.identifier),
+  hidingNonceCommitment: hexToPoint(s.hidingNonceCommitment),
+  bindingNonceCommitment: hexToPoint(s.bindingNonceCommitment),
+})
 
 /**
  * One isolated two-round FROST signing session (one message) owned by a
@@ -226,6 +306,50 @@ class SigningSession {
     this.committed = false
     this.message = undefined
   }
+
+  /**
+   * Serializes this session to a JSON-safe snapshot (includes secret nonces).
+   * @returns The session snapshot.
+   */
+  toSnapshot (): SigningSessionSnapshot {
+    return {
+      id: this.id,
+      committed: this.committed,
+      message: this.message === undefined ? undefined : bigToHex(this.message),
+      localBindings: this.localBindings.map((sb) => ({
+        nonces: {
+          hidingNonce: bigToHex(sb.bindings.nonces.hidingNonce),
+          bindingNonce: bigToHex(sb.bindings.nonces.bindingNonce),
+        },
+        commitments: commitmentToSnapshot(sb.bindings.commitments),
+        share: { id: sb.share.id, skShare: bigToHex(sb.share.skShare) },
+      })),
+      remoteSigners: this.remoteSigners.map(commitmentToSnapshot),
+      partials: Array.from(this.partialsById.entries()).map(([id, v]) => [id, bigToHex(v)]),
+    }
+  }
+
+  /**
+   * Rebuilds a session from a snapshot produced by {@link SigningSession#toSnapshot}.
+   * @param manager Owning manager for the restored session.
+   * @param snap A session snapshot.
+   * @returns The restored session.
+   */
+  static fromSnapshot (manager: FROSTSigningManager, snap: SigningSessionSnapshot): SigningSession {
+    const session = new SigningSession(manager, snap.id)
+    session.committed = snap.committed
+    session.message = snap.message === undefined ? undefined : BigInt(snap.message)
+    session.localBindings = snap.localBindings.map((b) => ({
+      bindings: {
+        nonces: { hidingNonce: BigInt(b.nonces.hidingNonce), bindingNonce: BigInt(b.nonces.bindingNonce) },
+        commitments: snapshotToCommitment(b.commitments),
+      },
+      share: { id: b.share.id, skShare: BigInt(b.share.skShare) },
+    }))
+    session.remoteSigners = snap.remoteSigners.map(snapshotToCommitment)
+    session.partialsById = new Map(snap.partials.map(([id, v]) => [id, BigInt(v)]))
+    return session
+  }
 }
 
 /**
@@ -331,6 +455,43 @@ class FROSTSigningManager {
     return this.sessions.get(DEFAULT_SESSION) ?? this.startSession(DEFAULT_SESSION)
   }
 
+  // --- persistence ----------------------------------------------------------
+
+  /**
+   * Serializes the manager and all live sessions to a JSON-safe snapshot for
+   * pause/resume across process restarts.
+   *
+   * The snapshot includes secret material (signer shares and local nonces);
+   * persist it only to trusted storage.
+   * @returns A versioned, hex-encoded snapshot suitable for JSON.stringify.
+   */
+  toJSON (): SigningManagerSnapshot {
+    return {
+      version: SNAPSHOT_VERSION,
+      threshold: this.threshold,
+      groupPublicKey: pointToHex(this.groupPublicKey),
+      signers: this.signers.map((s) => ({ id: s.id, skShare: bigToHex(s.skShare) })),
+      sessions: Array.from(this.sessions.values()).map((s) => s.toSnapshot()),
+    }
+  }
+
+  /**
+   * Rebuilds a manager (and its sessions) from a snapshot produced by {@link FROSTSigningManager#toJSON}.
+   * @param snapshot A snapshot at the current SNAPSHOT_VERSION.
+   * @returns A manager restored to the snapshot's exact state.
+   */
+  static fromJSON (snapshot: SigningManagerSnapshot): FROSTSigningManager {
+    if (!snapshot || snapshot.version !== SNAPSHOT_VERSION) {
+      throw new Error(`unsupported signing snapshot version: ${snapshot?.version}`)
+    }
+    const manager = new FROSTSigningManager(hexToPoint(snapshot.groupPublicKey), snapshot.threshold)
+    for (const s of snapshot.signers) manager.signers.push({ id: s.id, skShare: BigInt(s.skShare) })
+    for (const sessSnap of snapshot.sessions) {
+      manager.sessions.set(sessSnap.id, SigningSession.fromSnapshot(manager, sessSnap))
+    }
+    return manager
+  }
+
   // --- flat single-session API ----------------------------------------------
   // Thin delegates to a lazily-created 'default' session, preserving the
   // single-session API. See SigningSession for the documented behavior.
@@ -407,5 +568,5 @@ class FROSTSigningManager {
   get localBindings () { return this.defaultSession().localBindings }
 }
 
-export type { SignerShare, SessionBinding, PartialSignature }
+export type { SignerShare, SessionBinding, PartialSignature, SigningManagerSnapshot, SigningSessionSnapshot }
 export { FROSTSigningManager, SigningSession }
