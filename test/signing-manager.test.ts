@@ -190,4 +190,73 @@ describe('BabyFrost Signing Manager', () => {
     assert.equal(signers[0]!.partialsById.size, 0)
     assert.equal(signers[0]!.readyToFinalize(), false)
   })
+
+  it('readyToFinalize requires every participant when the set exceeds threshold', () => {
+    // 3 participants commit but threshold is only 2. The commitment list (and
+    // thus the Lagrange interpolation) spans all 3, so finalize needs all 3
+    // partials. readyToFinalize must not report ready at merely `threshold`.
+    const signers: FROSTSigningManager[] = []
+    for (const v of multiSigVector) {
+      const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 2)
+      signer.addSigner({ id: v.id, skShare: v.share.skShare })
+      signers.push(signer)
+    }
+    const message = 12345n
+    for (const signer of signers) {
+      signer.round1()
+      const c = signer.exportRound1()
+      for (const s of c) for (const s2 of signers) if (!s2.hasId(s.identifier)) s2.addRemoteSigner(s)
+    }
+    const partials = signers.map(s => s.sign(message))
+
+    const target = signers[0]!
+    // Deliver only 2 of 3 partials (threshold-many) — must NOT be ready.
+    target.receivePartials(partials[0]!)
+    target.receivePartials(partials[1]!)
+    assert.equal(target.readyToFinalize(), false, 'threshold-many partials is not enough when set > threshold')
+    assert.throws(() => target.finalize(message), /Missing partials/)
+
+    // Deliver the last partial — now the full set is present.
+    target.receivePartials(partials[2]!)
+    assert.equal(target.readyToFinalize(), true)
+    const sig = target.finalize(message)
+    const ok = eddsaBuild.verifyPoseidon(target.frost.toBytes(message).toReversed(), sig, target.groupPublicKey)
+    assert(ok, 'aggregate over full participant set must verify')
+  })
+
+  it('sign rejects a second round1 without resetRoundState (stale local nonces)', () => {
+    const signers: FROSTSigningManager[] = []
+    for (const v of multiSigVector) {
+      const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+      signer.addSigner({ id: v.id, skShare: v.share.skShare })
+      signers.push(signer)
+    }
+    const message = 12345n
+    for (const signer of signers) {
+      signer.round1()
+      const c = signer.exportRound1()
+      for (const s of c) for (const s2 of signers) if (!s2.hasId(s.identifier)) s2.addRemoteSigner(s)
+    }
+
+    // Start a fresh round on signer 0 but forget to resetRoundState(): its local
+    // nonces are regenerated while the remote commitments are now a round behind.
+    signers[0]!.round1()
+    assert.throws(() => signers[0]!.sign(message), /without resetRoundState/)
+
+    // The documented recovery path clears the round and re-exchanges.
+    signers[0]!.resetRoundState()
+    signers[0]!.round1()
+    for (const signer of signers) {
+      const c = signer.exportRound1()
+      for (const s of c) if (!signers[0]!.hasId(s.identifier)) signers[0]!.addRemoteSigner(s)
+    }
+    assert.doesNotThrow(() => signers[0]!.sign(message))
+  })
+
+  it('addSigner rejects a duplicate identifier', () => {
+    const v = multiSigVector[0]!
+    const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+    signer.addSigner({ id: v.id, skShare: v.share.skShare })
+    assert.throws(() => signer.addSigner({ id: v.id, skShare: v.share.skShare }), /already added/)
+  })
 })

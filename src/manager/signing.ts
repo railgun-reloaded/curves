@@ -8,13 +8,6 @@ import type { Bindings, Commitment } from '../frost/types.js'
 type SignerShare = { id: number; skShare: bigint }
 type SessionBinding = { bindings: Bindings, share: SignerShare }
 type PartialSignature = { identifier: number, partial: bigint }
-type SigningSession = {
-  msgHash: bigint,
-  signers: SignerShare[],
-  groupPublicKey: Point<bigint>,
-  remoteSigners: Commitment[],
-  partials: bigint[]
-}
 
 /**
  * Small orchestration helper for the two-round Baby FROST signing flow.
@@ -37,10 +30,17 @@ class FROSTSigningManager {
   groupPublicKey: Point<bigint>
   /** Collected partial signatures keyed by participant identifier. */
   partialsById: Map<number, bigint> = new Map()
-  /** External session snapshots recorded for consumers. */
-  sessions: SigningSession[] = []
   /** Threshold required to aggregate a final signature. */
   threshold: number
+
+  /**
+   * Number of round1() calls since the last resetRoundState(). The interleaved
+   * exchange legitimately calls round1() exactly once per round (a node may even
+   * receive every peer commitment before its own round1()), so a count > 1 means
+   * local nonces were regenerated without re-exchanging — the cross-round footgun
+   * that sign()/finalize() reject via assertRoundNotRestarted().
+   */
+  private round1CallsSinceReset = 0
 
   /**
    * Creates a signing manager bound to a finalized group public key.
@@ -60,28 +60,9 @@ class FROSTSigningManager {
    */
   hasId (identifier: bigint) {
     for (const s of this.signers) {
-      if (s.id === Number(identifier.toString(10))) return true
+      if (s.id === Number(identifier)) return true
     }
     return false
-  }
-
-  /**
-   * Records an external session snapshot for consumers that want to track rounds.
-   * @param msgHash Message hash for the session.
-   * @param signers Signers included in the session.
-   * @param publicKey Group public key.
-   * @returns The recorded session object.
-   */
-  createSession (msgHash: bigint, signers: SignerShare[], publicKey: Point<bigint>) {
-    const session = {
-      msgHash,
-      signers,
-      groupPublicKey: publicKey,
-      remoteSigners: [],
-      partials: []
-    }
-    this.sessions.push(session)
-    return session
   }
 
   /**
@@ -89,6 +70,9 @@ class FROSTSigningManager {
    * @param signer Local signer share.
    */
   addSigner (signer: SignerShare) {
+    if (this.signers.some(s => s.id === signer.id)) {
+      throw new Error(`signer ${signer.id} already added`)
+    }
     this.signers.push(signer)
   }
 
@@ -112,6 +96,9 @@ class FROSTSigningManager {
     // interleaves round1() and addRemoteSigner() across peers; use
     // resetRoundState() to clear remote commitments between distinct rounds.)
     this.partialsById.clear()
+    // Count restarts so sign()/finalize() can reject a second round1() that
+    // regenerated local nonces without an intervening resetRoundState().
+    this.round1CallsSinceReset++
 
     for (const signer of this.signers) {
       const bindings = this.frost.commit(signer.skShare, BigInt(signer.id))
@@ -151,11 +138,28 @@ class FROSTSigningManager {
   }
 
   /**
-   * Produces local signature shares for the provided message hash.
-   * @param msgHash Message hash to sign.
+   * Throws if round1() was run more than once without a resetRoundState().
+   *
+   * Guards the cross-round footgun: a second round1() regenerates this node's
+   * local nonces while peers still hold its previous commitments, so the group
+   * commitment it computes no longer matches theirs and any partial it produces
+   * is invalid. The documented restart path is resetRoundState() then round1().
+   * @param where Calling context used in the error message.
+   */
+  private assertRoundNotRestarted (where: string) {
+    if (this.round1CallsSinceReset > 1) {
+      throw new Error(`${where}: round1() was run again without resetRoundState(); local nonces changed but the round was not re-exchanged. Call resetRoundState() and restart the round`)
+    }
+  }
+
+  /**
+   * Produces local signature shares for the provided message.
+   * @param message Message scalar to sign.
    * @returns Signature shares for all local signers.
    */
-  sign (msgHash: bigint) {
+  sign (message: bigint) {
+    if (this.localBindings.length === 0) throw new Error('No local commitments; run round1 first')
+    this.assertRoundNotRestarted('sign')
     const partials = []
     const commitmentList = this.getCommitmentList()
     if (commitmentList.length === 0) throw new Error('No commitments available; run round1 and collect remotes first')
@@ -165,7 +169,7 @@ class FROSTSigningManager {
         signer.share.skShare,
         this.groupPublicKey,
         signer.bindings.nonces,
-        msgHash,
+        message,
         commitmentList
       )
       const complete = { identifier: signer.share.id, partial }
@@ -187,10 +191,11 @@ class FROSTSigningManager {
 
   /**
    * Finalizes an aggregate signature once all expected partials are available.
-   * @param msgHash Message hash being signed.
+   * @param message Message scalar being signed.
    * @returns The aggregate FROST signature.
    */
-  finalize (msgHash: bigint) {
+  finalize (message: bigint) {
+    this.assertRoundNotRestarted('finalize')
     const commitmentList = this.getCommitmentList()
     if (commitmentList.length === 0) throw new Error('No commitments available; cannot finalize')
     const expectedIds = commitmentList.map(c => Number(c.identifier))
@@ -213,20 +218,20 @@ class FROSTSigningManager {
         sigShare,
         commitmentList,
         this.groupPublicKey,
-        msgHash
+        message
       )
       if (!ok) throw new Error(`Local signature share failed verification for local signer ${id}`)
     }
 
     const sigShares: bigint[] = expectedIds.map(id => this.partialsById.get(id)!)
-    const sig = this.frost.aggregate(commitmentList, msgHash, this.groupPublicKey, sigShares)
+    const sig = this.frost.aggregate(commitmentList, message, this.groupPublicKey, sigShares)
     // Only local signature shares can be checked above (verifySignatureShare needs
     // each signer's secret share, which we hold only for local signers). A forged
     // or malformed *remote* partial would otherwise produce an invalid aggregate
     // returned without complaint, so verify the aggregate before handing it back.
     // Per-signer fault attribution would require exchanging public verification
     // shares, which this manager does not model.
-    const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(msgHash), sig, this.groupPublicKey)
+    const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(message), sig, this.groupPublicKey)
     if (!ok) throw new Error('Aggregate signature failed verification; a partial signature is invalid')
     return sig
   }
@@ -249,15 +254,15 @@ class FROSTSigningManager {
   }
 
   /**
-   * Returns true when enough partials are present to satisfy the threshold.
-   * @returns `true` when the round has enough partials to finalize.
+   * Returns true when every signer in the active commitment list has a partial.
+   *
+   * finalize() interpolates over the full commitment list, so a partial is
+   * required from every participant in it — not merely `threshold`-many. (The
+   * threshold floor is enforced separately by getCommitmentList().)
+   * @returns `true` when the round has every expected partial and can finalize.
    */
   readyToFinalize () {
-    const commitmentList = this.getCommitmentList()
-    const expectedIds = commitmentList.map(c => Number(c.identifier))
-    const available = expectedIds.filter(id => this.partialsById.has(id)).length
-    const required = this.threshold
-    return available >= required
+    return this.getMissingPartials().length === 0
   }
 
   /**
@@ -267,8 +272,9 @@ class FROSTSigningManager {
     this.localBindings = []
     this.remoteSigners = []
     this.partialsById.clear()
+    this.round1CallsSinceReset = 0
   }
 }
 
-export type { SignerShare, SessionBinding, PartialSignature, SigningSession }
+export type { SignerShare, SessionBinding, PartialSignature }
 export { FROSTSigningManager }
