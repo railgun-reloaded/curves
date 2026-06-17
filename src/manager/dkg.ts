@@ -331,6 +331,15 @@ class DKGManager {
       } catch (cause) {
         throw new Error(`failed to decrypt share from dealer ${dealerId}`, { cause })
       }
+      // Verify the decrypted share lies on the dealer's committed polynomial.
+      // AES-GCM AAD only authenticates transport against the commitment digest;
+      // it does not prove the share is consistent with the Feldman commitments.
+      // Without this check a malicious/buggy dealer could fold an invalid share
+      // into the aggregate signing key undetected.
+      const dealerCommitments = this.commitmentsByDealerId[dealerId]
+      if (!dealerCommitments || !this.dkg.verifyFeldmanShare(this.participantID, decrypted, dealerCommitments)) {
+        throw new Error(`invalid share from dealer ${dealerId}: failed Feldman verification`)
+      }
       decryptedByDealer[dealerId] = decrypted
     }
     if (missing.length) {

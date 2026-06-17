@@ -199,4 +199,60 @@ describe('DKGManager e2e flow test', () => {
     const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(msg), sig, groupPublicKey)
     assert.strictEqual(ok, true, 'coordinator-less flow signing verification failed')
   })
+
+  it('coordinator-less flow: rejects an off-polynomial share during finalize', () => {
+    const threshold = 3
+    const secrets = [0x11n, 0x22n, 0x33n, 0x44n, 0x55n]
+    const dealers: DKGManager[] = []
+
+    const announcements: Uint8Array[] = []
+    for (let i = 0; i < secrets.length; i++) {
+      const d = new DKGManager('test-participant-1')
+      dealers.push(d)
+      announcements.push(d.getAnnouncement().pubKey)
+    }
+    const roster: Record<number, Uint8Array> = {}
+    announcements.forEach((a, idx) => { roster[idx + 1] = a })
+
+    const commitmentsByDealer: Record<number, ReturnType<DKGManager['commitmentRound']>['commitments']> = {}
+    dealers.forEach((dealer, idx) => {
+      dealer.assignRoster(roster)
+      const { commitments: comms } = dealer.commitmentRound(secrets[idx]!, secrets.length, threshold)
+      commitmentsByDealer[idx + 1] = comms
+    })
+    dealers.forEach((dealer) => {
+      for (const idStr in commitmentsByDealer) {
+        const id = Number(idStr)
+        dealer.addParticipantCommitments(id, commitmentsByDealer[id]!)
+      }
+    })
+
+    const encryptedByDealerId: Record<number, ReturnType<DKGManager['getEncryptedShares']>> = {}
+    dealers.forEach((dealer, idx) => { encryptedByDealerId[idx + 1] = dealer.getEncryptedShares() })
+
+    // Forge dealer 2's share to participant 1: encrypt an off-polynomial scalar
+    // under the SAME commitment set (so the AES-GCM AAD digest still matches and
+    // we exercise the Feldman check, not the AEAD tag). The honest ECDH key is
+    // shared, so we read it from the victim (participant 1 == dealers[0]).
+    const victim = dealers[0]!
+    const ordered = Object.keys(commitmentsByDealer).map(Number).sort((a, b) => a - b)
+      .map((id) => commitmentsByDealer[id]!)
+    const sharedKey1to2 = victim.keysByID[2]!
+    const forged = victim.dkg.encryptSharesAESGCMWithAAD(
+      { 1: 12345n }, // arbitrary scalar, not on dealer 2's polynomial
+      { 1: sharedKey1to2 },
+      ordered
+    )
+    encryptedByDealerId[2]![1] = forged[1]!
+
+    dealers.forEach((dealer) => {
+      for (const idStr in encryptedByDealerId) dealer.addEncryptedShares(Number(idStr), encryptedByDealerId[Number(idStr)]!)
+    })
+
+    assert.throws(
+      () => victim.finalize(),
+      /invalid share from dealer 2: failed Feldman verification/,
+      'finalize must reject a share inconsistent with the dealer commitments'
+    )
+  })
 })
