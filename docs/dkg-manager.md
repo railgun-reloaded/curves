@@ -7,6 +7,15 @@ A small orchestration helper around the FROST DKG primitives that supports two f
 
 This README covers the public API, step-by-step usage, and common errors. The code lives in `src/manager/dkg.ts`.
 
+## Determinism (by design)
+
+Given the same input secrets, the DKG produces:
+
+- a **deterministic** group public key and `viewingPrivateKey` — both depend only on the secrets (the constant terms of the dealer polynomials), so re-running with the same secrets always yields the same group key; and
+- **non-deterministic** individual signing shares (`skShare`) — the higher-order polynomial coefficients are sampled fresh from a CSPRNG on every run (`trustedDealerKeygen`), so each run yields a different valid (t, n) sharing of the *same* group secret.
+
+This is intentional and is **not** a bug: reproducible secret shares would let a re-run regenerate identical share material (a replay/leakage footgun). Any threshold subset still reconstructs and signs for the same group public key. To recover or resume a participant's exact share, persist its snapshot via `toJSON()`/`fromJSON()` rather than relying on re-derivation. (Two other values default to random but do not affect the resulting keys: the communication keypair — pass one to the constructor to fix it — and FROST signing nonces.)
+
 ## Public API (stable)
 
 - `new DKGManager()`
