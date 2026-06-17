@@ -288,8 +288,17 @@ class TrustedDKG extends RailJubCurvePoint {
 
   /**
    * Derives a deterministic viewing key from the set of dealer commitments.
+   *
+   * By design this is a pure function of the (broadcast) dealer commitments, so
+   * every participant independently derives the *same* viewing key without any
+   * extra exchange. This is intentional: each share-holder must load the same
+   * shareable viewing key into the engine to have view access to the funds the
+   * group controls. Consequently this value is NOT secret against anyone who
+   * observes the dealer commitments — its confidentiality relies on those
+   * commitments not leaking outside the participant set, not on per-participant
+   * secret entropy.
    * @param allDealerCommitments Commitment vectors from every dealer.
-   * @returns The derived 32-byte viewing private key.
+   * @returns The derived 32-byte shared viewing private key.
    */
   deriveViewKeyFromPK (allDealerCommitments: Point<bigint>[][]): Uint8Array {
     const C0s: Point<bigint>[] = []
