@@ -191,7 +191,9 @@ class TrustedDKG extends RailJubCurvePoint {
     for (const dealerCom of allDealerCommitments) {
       if (!dealerCom?.length) throw new Error('dealer missing commitments')
       const P0 = dealerCom[0]!
-      if (!this.pointsEqual(this.ScalarMult(P0, this.order), this.Identity())) {
+      // Use mulPointEscalar directly: ScalarMult reduces the scalar mod order,
+      // turning `order` into 0 and making the subgroup test pass for every point.
+      if (!this.pointsEqual(mulPointEscalar(P0, this.order), this.Identity())) {
         throw new Error('C0 not in subgroup')
       }
       acc = addPoint(acc, P0)
@@ -209,7 +211,7 @@ class TrustedDKG extends RailJubCurvePoint {
     for (const dealerCom of allDealerCommitments) {
       if (!dealerCom?.length) return false
       for (const Cj of dealerCom) {
-        if (!this.pointsEqual(this.ScalarMult(Cj, this.order), this.Identity())) return false
+        if (!this.pointsEqual(mulPointEscalar(Cj, this.order), this.Identity())) return false
       }
     }
     return true
@@ -237,7 +239,7 @@ class TrustedDKG extends RailJubCurvePoint {
       let pow = 1n
       const idL = this.modOrder(BigInt(id))
       for (const Cj of commitments) {
-        if (!this.pointsEqual(this.ScalarMult(Cj, this.order), this.Identity())) return false
+        if (!this.pointsEqual(mulPointEscalar(Cj, this.order), this.Identity())) return false
         RHS = addPoint(RHS, this.ScalarMult(Cj, pow))
         pow = this.modOrder(pow * idL)
       }
