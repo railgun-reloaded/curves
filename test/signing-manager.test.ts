@@ -84,7 +84,7 @@ describe('BabyFrost Signing Manager', () => {
     }
     for (const signer of signers) {
       for (const p of partials) {
-        signer.recievePartials(p)
+        signer.receivePartials(p)
       }
     }
     const sig = signers[0]!.finalize(message)
@@ -131,7 +131,7 @@ describe('BabyFrost Signing Manager', () => {
       partials.push(signer.sign(message))
     }
     for (const signer of signers) {
-      for (const p of partials) signer.recievePartials(p)
+      for (const p of partials) signer.receivePartials(p)
       assert.deepStrictEqual(signer.getMissingPartials(), [])
       assert.equal(signer.readyToFinalize(), true)
     }

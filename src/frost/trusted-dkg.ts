@@ -107,7 +107,7 @@ class TrustedDKG extends RailJubCurvePoint {
    * @param MAX_PARTICIPANTS Total number of shares to derive.
    * @returns The derived shares and the full coefficient list including `s`.
    */
-  secretShareShard (s: bigint, coefficients: bigint[], MAX_PARTICIPANTS: number): { secretKeyShares: { x_i: number, y_i: bigint }[]; coefficients: any } {
+  secretShareShard (s: bigint, coefficients: bigint[], MAX_PARTICIPANTS: number): { secretKeyShares: { x_i: number, y_i: bigint }[]; coefficients: bigint[] } {
     const coeffs = [s, ...coefficients]
     const secretKeyShares: { x_i: number, y_i: bigint }[] = []
     for (let x_i = 1; x_i <= MAX_PARTICIPANTS + 1; x_i++) {

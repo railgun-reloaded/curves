@@ -188,6 +188,43 @@ describe('TrustedDKG end-to-end', () => {
     const okAgg = eddsaBuild.verifyPoseidon(frost.toBytes(msgHash).toReversed(), sig, groupPublicKey)
     assert.strictEqual(okAgg, true, 'FROST aggregate failed verification')
   })
+
+  it('3-of-5 flow: FROST aggregate verifies for a non-contiguous signer subset {1,2,4}', () => {
+    const threshold = 3
+    const n = 5
+    const secret = 0x43583e33fb2f47faa243b5cdf8cb251f7e9482f0386064901ae0c5e2134b78fn
+    const { participantPrivateKeys: shares, vssCommitment } = dkg.trustedDealerKeygen(secret, n, threshold)
+
+    // Finalize every participant's signing share (single-dealer view).
+    const finalized: Array<{ id: number; skShare: bigint }> = []
+    for (let i = 0; i < n; i++) {
+      const { x_i, y_i } = shares[i]!
+      const res = dkg.finalizeParticipant(x_i, [{ dealerId: 1, s_ki: y_i }], [vssCommitment])
+      finalized.push({ id: x_i, skShare: res.share.skShare })
+    }
+
+    const group = dkg.deriveGroupInfo(n, threshold, vssCommitment)
+    const groupPublicKey = group.PK!
+
+    // Sign with a non-contiguous threshold subset: participants 1, 2, and 4.
+    // Their Lagrange interpolation values at zero are non-integers (λ_1 = 8/3),
+    // so a truncating integer division would compute the wrong scalar and the
+    // aggregate signature would fail to verify. Contiguous subsets like {1,2,3}
+    // happen to yield integer coefficients and hide the bug.
+    const frost = new BabyFROST()
+    const subset = [finalized[0]!, finalized[1]!, finalized[3]!]
+    assert.deepStrictEqual(subset.map((s) => s.id), [1, 2, 4], 'signing subset must be non-contiguous')
+
+    const msgHash = BigInt('0x' + poseidonHex(['0x' + 12345n.toString(16)], true))
+    const parts = subset.map((s) => frost.commit(s.skShare, BigInt(s.id)))
+    const commitmentList: Commitment[] = parts.map((a) => ({ ...a.commitments }))
+    const sigShares = subset.map((s, i) =>
+      frost.sign(parts[i]!.commitments.identifier, s.skShare, groupPublicKey, parts[i]!.nonces, msgHash, commitmentList)
+    )
+    const sig = frost.aggregate(commitmentList, msgHash, groupPublicKey, sigShares)
+    const okAgg = eddsaBuild.verifyPoseidon(frost.toBytes(msgHash).toReversed(), sig, groupPublicKey)
+    assert.strictEqual(okAgg, true, 'FROST aggregate over non-contiguous subset {1,2,4} failed verification')
+  })
 })
 
 describe('TrustedDKG coordinator-less end-to-end', () => {

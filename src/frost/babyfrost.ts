@@ -97,11 +97,11 @@ class BabyFROST extends RailJubCurvePoint {
     let dom = 1n
     for (const x_j of L) {
       if (x_j === x_i) continue
-      num *= x_j
-      dom *= x_j - x_i
+      num = this.modOrder(num * this.modOrder(x_j))
+      dom = this.modOrder(dom * this.modOrder(x_j - x_i))
     }
-    const value = num / dom
-    return value
+    const invDom = this.invModOrder(dom)
+    return this.modOrder(num * invDom)
   }
 
   /**
@@ -311,5 +311,4 @@ class BabyFROST extends RailJubCurvePoint {
 const frost = new BabyFROST()
 export { frost, BabyFROST }
 
-// export type { LocalNonces, CommitmentPublic, PartialSignature, AggregateSignature }
 export default BabyFROST

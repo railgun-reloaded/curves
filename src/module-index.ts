@@ -1,5 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
-
 import { decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpack'
 import { getPublicKey } from '@noble/ed25519'
 import { bytesToBigInt, bytesToHex, hexToBytes } from '@railgun-reloaded/bytes'
@@ -37,10 +35,21 @@ type DecodedMultisigKey = {
   pid: number
 }
 
+/**
+ * Narrows an unknown value to a plain record for safe property access.
+ * @param value Value to test.
+ * @returns `true` when the value is a non-null object.
+ */
 function isRecord (value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+/**
+ * Strips an optional `0x` prefix and validates/pads a hex string.
+ * @param value Candidate hex string.
+ * @param field Field name used in error messages.
+ * @returns The normalized even-length hex string without `0x`.
+ */
 function normalizeHex (value: string, field: string): string {
   const hex = value.startsWith('0x') ? value.slice(2) : value
   if (!/^[0-9a-fA-F]*$/.test(hex)) throw new Error(`Invalid ${field}: expected hex string`)
@@ -48,6 +57,11 @@ function normalizeHex (value: string, field: string): string {
   return hex.length % 2 === 0 ? hex : `0${hex}`
 }
 
+/**
+ * Asserts that a private key is exactly 32 bytes.
+ * @param key Key bytes to check.
+ * @param field Field name used in error messages.
+ */
 function assertPrivateKeyLength (key: Uint8Array, field: string) {
   if (key.length !== 32) throw new Error(`Invalid ${field} length`)
 }
@@ -59,7 +73,7 @@ function assertPrivateKeyLength (key: Uint8Array, field: string) {
  * @returns The Poseidon digest encoded as bytes.
  */
 function poseidon (inputs: Uint8Array[]) {
-  const result = poseidonFn(inputs.map(a => a.reverse())) as bigint
+  const result = poseidonFn(inputs.map(a => a.toReversed())) as bigint
   return bigIntToBuffer(result).toReversed()
 }
 

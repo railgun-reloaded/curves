@@ -1,5 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
-
 import { blake2b } from '@noble/hashes/blake2.js'
 import { concatBytes } from '@noble/hashes/utils.js'
 import type { Point } from '@zk-kit/baby-jubjub'
@@ -8,7 +6,11 @@ import { poseidon5 } from 'poseidon-lite'
 import { leBigIntToBuffer, leBufferToBigInt } from './bytes.js'
 
 type HashFn = (m: Uint8Array) => Uint8Array
-// TODO: to modularize this hasher, we can add more hash functions here
+/**
+ * Default base hash: BLAKE2b with a 64-byte digest length.
+ * @param m Input bytes.
+ * @returns The 64-byte BLAKE2b digest.
+ */
 function blake2BWrapper (m: Uint8Array) {
   return blake2b(m, { dkLen: 64 })
 }
@@ -19,8 +21,11 @@ function blake2BWrapper (m: Uint8Array) {
  * The tag names follow the RFC 9591-style domains used throughout this repo.
  */
 class RFC9591Hasher {
+  /** Domain-separation prefix applied to every hash. */
   public readonly contextString: string
+  /** Base hash function used before scalar reduction. */
   private readonly hashFn: HashFn
+  /** Scalar field order used for modular reduction. */
   private readonly order: bigint
 
   /**
@@ -60,7 +65,7 @@ class RFC9591Hasher {
    * @param input Input bytes.
    * @returns The hash digest bytes.
    */
-  taggedHash (tag: string, input: any) {
+  taggedHash (tag: string, input: Uint8Array) {
     const encoder = new TextEncoder()
     const prefixBuf = encoder.encode(this.contextString)
     const tagBuf = encoder.encode(tag)

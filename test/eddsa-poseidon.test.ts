@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import assert from 'node:assert/strict'
 import { before, describe, it } from 'node:test'
 
@@ -7,6 +6,10 @@ import { randomBytes } from '@noble/hashes/utils.js'
 import { eddsaBuild } from '../src/eddsa/index.js'
 import { decodeMultisigKey, decodeShareableKey, getShareableMultisigKey, getShareableViewingKey } from '../src/index.js'
 
+/**
+ * Generates a random 32-byte key for test fixtures.
+ * @returns 32 random bytes.
+ */
 function randomKey (): Uint8Array {
   const k = randomBytes(32)
   return k

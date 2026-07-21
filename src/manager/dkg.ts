@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import {
   x25519
 } from '@noble/curves/ed25519.js'
@@ -29,20 +28,33 @@ enum DKGFlowState {
  * trying to reuse finalized state.
  */
 class DKGManager {
+  /** Human-readable participant name used in announcements. */
   name: string
+  /** Underlying trusted-dealer / coordinator-less DKG primitive. */
   dkg: TrustedDKG
+  /** Local participant identifier once the roster is known. */
   participantID: number | undefined
+  /** Secret X25519 communication key used for share encryption. */
   private secretComKey: Uint8Array
+  /** Public X25519 communication key announced to peers. */
   pubComKey: Uint8Array
+  /** Mapping of participant id to public communication key. */
   roster: Record<number, Uint8Array>
+  /** Per-peer shared secrets derived from the roster. */
   keysByID: Record<number, Uint8Array> = {}
+  /** This participant's decrypted shares keyed by dealer id. */
   private shares: Record<number, bigint> = {}
+  /** Participant identifiers this dealer produced shares for. */
   recipientIds: number[] = []
+  /** Encrypted share bundles keyed by dealer id then recipient id. */
   encryptedShares: Record<number, Record<number, EncryptedShare>> = {}
+  /** Public commitment vectors keyed by dealer id. */
   private commitmentsByDealerId: Record<number, Point<bigint>[]> = {}
 
+  /** Current orchestration state guarding call ordering. */
   private state: DKGFlowState = DKGFlowState.Init
 
+  /** Monotonic ordering used to compare flow states. */
   private readonly stateOrder: Record<DKGFlowState, number> = {
     [DKGFlowState.Init]: 0,
     [DKGFlowState.RosterAssigned]: 1,
@@ -53,6 +65,11 @@ class DKGManager {
     [DKGFlowState.Finalized]: 6,
   }
 
+  /**
+   * Throws unless the current state is one of the allowed states.
+   * @param where Caller name used in the error message.
+   * @param allowed States permitted for the calling operation.
+   */
   private ensureStateIn (where: string, allowed: DKGFlowState[]) {
     if (!allowed.includes(this.state)) {
       const allowedStr = allowed.join('|')
@@ -60,6 +77,11 @@ class DKGManager {
     }
   }
 
+  /**
+   * Throws unless the current state is at least the given minimum.
+   * @param where Caller name used in the error message.
+   * @param min Minimum state required for the calling operation.
+   */
   private ensureStateAtLeast (where: string, min: DKGFlowState) {
     if (this.stateOrder[this.state] < this.stateOrder[min]) {
       throw new Error(`${where} requires state >= ${min}, current=${this.state}`)
@@ -72,6 +94,10 @@ class DKGManager {
    */
   getState () { return this.state }
 
+  /**
+   * Returns every dealer's commitment vector ordered by dealer id.
+   * @returns Commitment vectors for all dealers in roster order.
+   */
   private getAllDealerCommitments (): Point<bigint>[][] {
     // must have collected complete commitments set
     this.ensureStateAtLeast('getAllDealerCommitments', DKGFlowState.CommitmentsCollected)
@@ -88,6 +114,11 @@ class DKGManager {
     return ordered
   }
 
+  /**
+   * Creates a DKG manager for a named participant.
+   * @param participantName Human-readable participant name.
+   * @param secretCommKey Optional 32-byte communication key; random if omitted.
+   */
   constructor (participantName: string, secretCommKey?: Uint8Array) {
     this.dkg = new TrustedDKG()
     // this.secretComKey = this.dkg.RandomScalar() -- example of another way for random bytes... this key does not need to be a scalar though.
@@ -209,14 +240,14 @@ class DKGManager {
 
   /**
    * Stores a dealer's public commitments for later verification and finalization.
-   * @param particpantID Dealer identifier.
+   * @param participantID Dealer identifier.
    * @param participantCommitments Public commitments broadcast by that dealer.
    */
-  addParticipantCommitments (particpantID: number, participantCommitments: Point<bigint>[]) {
+  addParticipantCommitments (participantID: number, participantCommitments: Point<bigint>[]) {
     this.ensureStateIn('addParticipantCommitments', [DKGFlowState.CommitmentsCreated, DKGFlowState.CommitmentsCollected])
-    if (!Number.isInteger(particpantID) || particpantID <= 0) throw new Error('bad participant id for commitments')
+    if (!Number.isInteger(participantID) || participantID <= 0) throw new Error('bad participant id for commitments')
     if (!participantCommitments?.length) throw new Error('empty commitments from participant')
-    this.commitmentsByDealerId[particpantID] = participantCommitments
+    this.commitmentsByDealerId[participantID] = participantCommitments
     // If roster is known and we have a full set of commitments, advance state
     const rosterIds = Object.keys(this.roster || {}).map(Number).sort((a, b) => a - b)
     const commitIds = Object.keys(this.commitmentsByDealerId).map(Number).sort((a, b) => a - b)
@@ -227,12 +258,12 @@ class DKGManager {
 
   /**
    * Stores a dealer's encrypted share bundle for this DKG session.
-   * @param particpantID Dealer identifier.
+   * @param participantID Dealer identifier.
    * @param shares Map of recipient id to encrypted share payload.
    */
-  addEncryptedShares (particpantID: number, shares: Record<number, EncryptedShare>) {
+  addEncryptedShares (participantID: number, shares: Record<number, EncryptedShare>) {
     this.ensureStateAtLeast('addEncryptedShares', DKGFlowState.CommitmentsCollected)
-    if (!Number.isInteger(particpantID) || particpantID <= 0) throw new Error('bad dealer id for encrypted shares')
+    if (!Number.isInteger(participantID) || participantID <= 0) throw new Error('bad dealer id for encrypted shares')
     if (!shares || typeof shares !== 'object') throw new Error('invalid encrypted shares bundle')
     // Basic validation for our expected entry if we know our id
     if (typeof this.participantID !== 'undefined') {
@@ -241,7 +272,7 @@ class DKGManager {
         // Allow storing anyway, but surface a strong error when decrypting
       }
     }
-    this.encryptedShares[particpantID] = shares
+    this.encryptedShares[participantID] = shares
     const rosterIds = Object.keys(this.roster || {}).map(Number).sort((a, b) => a - b)
     const encIds = Object.keys(this.encryptedShares).map(Number).sort((a, b) => a - b)
     if (rosterIds.length && rosterIds.length === encIds.length && rosterIds.every((id, i) => id === encIds[i])) {
@@ -289,12 +320,17 @@ class DKGManager {
         missing.push(dealerId)
         continue
       }
-      const decrypted = this.dkg.decryptShareAESGCMWithAAD(
-        enc,
-        key,
-        this.participantID,
-        allDealerCommitments
-      )
+      let decrypted: bigint
+      try {
+        decrypted = this.dkg.decryptShareAESGCMWithAAD(
+          enc,
+          key,
+          this.participantID,
+          allDealerCommitments
+        )
+      } catch (cause) {
+        throw new Error(`failed to decrypt share from dealer ${dealerId}`, { cause })
+      }
       decryptedByDealer[dealerId] = decrypted
     }
     if (missing.length) {

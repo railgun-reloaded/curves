@@ -126,7 +126,7 @@ describe('DKGManager e2e flow test', () => {
     const msg = 42069n
     const partials: { identifier: number, partial: bigint }[][] = []
     for (const sm of signers) partials.push(sm.sign(msg))
-    for (const sm of signers) for (const p of partials) sm.recievePartials(p)
+    for (const sm of signers) for (const p of partials) sm.receivePartials(p)
 
     const sig = signers[0]!.finalize(msg)
     const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(msg), sig, groupPK)
@@ -193,7 +193,7 @@ describe('DKGManager e2e flow test', () => {
     const msg = 42069n
     const partials: { identifier: number, partial: bigint }[][] = []
     for (const sm of signers) partials.push(sm.sign(msg))
-    for (const sm of signers) for (const p of partials) sm.recievePartials(p)
+    for (const sm of signers) for (const p of partials) sm.receivePartials(p)
 
     const sig = signers[0]!.finalize(msg)
     const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(msg), sig, groupPublicKey)

@@ -13,7 +13,6 @@ type SigningSession = {
   remoteSigners: Commitment[],
   partials: bigint[]
 }
-/* eslint-disable jsdoc/require-jsdoc */
 
 /**
  * Small orchestration helper for the two-round Baby FROST signing flow.
@@ -22,16 +21,23 @@ type SigningSession = {
  * state in memory.
  */
 class FROSTSigningManager {
+  /** FROST primitive used for commit, sign, and aggregate operations. */
   frost: BabyFROST
 
-  signers: SignerShare[] = [] // map by id
-  // todo: make these session based...
-  localBindings: SessionBinding[] = [] // map by id?
+  /** Local signer shares owned by this manager instance. */
+  signers: SignerShare[] = []
+  /** Per-round nonce and commitment bindings for the local signers. */
+  localBindings: SessionBinding[] = []
 
+  /** Round-1 commitments collected from remote participants. */
   remoteSigners: Commitment[] = []
+  /** Finalized group public key for the active signing set. */
   groupPublicKey: Point<bigint>
+  /** Collected partial signatures keyed by participant identifier. */
   partialsById: Map<number, bigint> = new Map()
+  /** External session snapshots recorded for consumers. */
   sessions: SigningSession[] = []
+  /** Threshold required to aggregate a final signature. */
   threshold: number
 
   /**
@@ -130,7 +136,7 @@ class FROSTSigningManager {
     const list = Array.from(byId.values())
     list.sort((a, b) => (a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0))
     const required = this.threshold
-    if (required != null && list.length < required) {
+    if (list.length < required) {
       throw new Error(`Insufficient commitments: have ${list.length}, need >= ${required}`)
     }
     return list
@@ -164,7 +170,7 @@ class FROSTSigningManager {
    * Records partial signatures received from peers, ignoring duplicates by identifier.
    * @param partials Partial signatures received from peers.
    */
-  recievePartials (partials: PartialSignature[]) {
+  receivePartials (partials: PartialSignature[]) {
     for (const p of partials) {
       const id = Number(p.identifier)
       if (!this.partialsById.has(id)) this.partialsById.set(id, p.partial)

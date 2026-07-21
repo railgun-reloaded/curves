@@ -12,7 +12,7 @@ This README documents the public API, a minimal E2E example, and helper methods 
 - `exportRound1(): Commitment[]` — commitments for local signers to share with others.
 - `addRemoteSigner(commitment: Commitment): void` — add a commitment from another participant (id is unique).
 - `sign(msgHash: bigint): { identifier: number, partial: bigint }[]` — produce signature shares for all local signers, bound to the combined commitment list.
-- `recievePartials(partials: { identifier, partial }[]): void` — collect partials from others.
+- `receivePartials(partials: { identifier, partial }[]): void` — collect partials from others.
 - `finalize(msgHash: bigint)` → aggregated signature (tuple `[R8x, R8y, s]` from `BabyFROST`).
 
 Helper methods
@@ -52,7 +52,7 @@ for (const sm of signers) {
 const msg = 42069n
 const partialsFromAll: { identifier: number, partial: bigint }[][] = []
 for (const sm of signers) partialsFromAll.push(sm.sign(msg))
-for (const sm of signers) for (const batch of partialsFromAll) sm.recievePartials(batch)
+for (const sm of signers) for (const batch of partialsFromAll) sm.receivePartials(batch)
 
 // finalize and verify
 const sig = signers[0].finalize(msg)

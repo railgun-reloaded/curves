@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { bytesToBigInt } from '@railgun-reloaded/bytes'
 import * as poseidonLib from 'poseidon-lite'
 
@@ -6,13 +5,22 @@ import { bigIntToBuffer } from '../bytes.js'
 
 type PoseidonInput = bigint | number | string | Uint8Array
 
+/**
+ * Runs the fixed-arity Poseidon permutation matching the input count.
+ * Inputs may be bigint, number, string, or Uint8Array and are coerced to field
+ * elements before hashing.
+ * @param inputs Between 1 and 16 Poseidon inputs.
+ * @param returnBigInt When `true`, returns bigint output; otherwise byte output.
+ * @param nOuts Number of field outputs to return.
+ * @returns The Poseidon digest as bigint(s) or byte array(s).
+ */
 function poseidonFn (inputs: (PoseidonInput)[], returnBigInt = true, nOuts?: number) {
   const inputLen = inputs.length
   if (nOuts === undefined) {
     nOuts = 1 // Default to 1 output if not specified
   }
 
-  if (inputLen < 1 || inputLen > 14) {
+  if (inputLen < 1 || inputLen > 16) {
     throw new Error('Poseidon function index must be between 1 and 16')
   }
 
@@ -32,12 +40,9 @@ function poseidonFn (inputs: (PoseidonInput)[], returnBigInt = true, nOuts?: num
       throw new Error(`Invalid input type: ${typeof input}`)
     }
   }
-  // @ts-ignore
+  // @ts-expect-error dynamic index into the poseidon-lite namespace has no index signature
   const libFn = poseidonLib[`poseidon${inputLen}`]
-  const func = libFn
-  // poseidonFuncs[inputLen - 1]!
-  // ignore this because it gets modified.
-  const output = func(inputs as PoseidonInput[], nOuts)
+  const output = libFn(inputs as PoseidonInput[], nOuts)
   // convert this back into uint8array if nOuts is 1
   if (returnBigInt) {
     if (nOuts === 1) {
