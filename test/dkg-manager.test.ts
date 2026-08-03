@@ -133,6 +133,50 @@ describe('DKGManager e2e flow test', () => {
     assert.strictEqual(ok, true, 'coordinator-less flow signing verification failed')
   })
 
+  it('trusted method: signs correctly for non-consecutive signer subsets', () => {
+    const threshold = 3
+    const n = 5
+
+    const dkgManager = new DKGManager('test-participant-1')
+    const secret = BigInt(0x43583e33fb2f47faa243b5cdf8cb251f7e9482f0386064901ae0c5e2134b78fn)
+    const { groupPublicKey, shares } = dkgManager.runTrustedKeygen(secret, n, threshold)
+    const groupPK = groupPublicKey.map(p => BigInt(p)) as Point<bigint>
+    const msg = 42069n
+
+    // Any threshold-sized subset must produce a valid signature, not just the
+    // contiguous {1,2,3} slice. Lagrange coefficients for these subsets are not
+    // integers, so this regresses the integer-division interpolation bug.
+    const subsets = [
+      [1, 2, 5],
+      [2, 4, 5],
+      [1, 3, 5],
+    ]
+
+    for (const ids of subsets) {
+      const subset = ids.map(id => shares.find(s => s.identifier === id)!)
+      const signers: FROSTSigningManager[] = []
+      for (const f of subset) {
+        const sm = new FROSTSigningManager(groupPK, threshold)
+        sm.addSigner({ id: f.identifier, skShare: BigInt(f.skShare) })
+        signers.push(sm)
+      }
+
+      for (const sm of signers) {
+        sm.round1()
+        const c = sm.exportRound1()
+        for (const s of c) for (const sm2 of signers) if (!sm2.hasId(s.identifier)) sm2.addRemoteSigner(s)
+      }
+
+      const partials: { identifier: number, partial: bigint }[][] = []
+      for (const sm of signers) partials.push(sm.sign(msg))
+      for (const sm of signers) for (const p of partials) sm.receivePartials(p)
+
+      const sig = signers[0]!.finalize(msg)
+      const ok = eddsaBuild.verifyPoseidon(bigIntToBuffer(msg), sig, groupPK)
+      assert.strictEqual(ok, true, `signing verification failed for subset ${ids.join(',')}`)
+    }
+  })
+
   it('coordinator-less flow: finalize -> signing end-to-end (3-of-5)', () => {
     const threshold = 3
     const secrets = [0x11n, 0x22n, 0x33n, 0x44n, 0x55n]

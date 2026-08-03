@@ -255,7 +255,7 @@ class TrustedDKG extends RailJubCurvePoint {
    */
   deriveInterpolatingValue (ids: bigint[], x_i: bigint): bigint {
     const found = ids.find(a => { return a === x_i })
-    if (!found) throw new Error('invalid parameters')
+    if (found === undefined) throw new Error('invalid parameters')
     let num = 1n
     let dom = 1n
     for (const x_j of ids) {

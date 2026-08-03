@@ -217,7 +217,7 @@ const partialBatches = signers.map((signer) => signer.sign(42069n))
 // one peer to the others. Every peer must collect enough partials for the same
 // commitment set before finalization.
 for (const signer of signers) {
-	for (const batch of partialBatches) signer.recievePartials(batch)
+	for (const batch of partialBatches) signer.receivePartials(batch)
 }
 
 // Any peer with the full partial set can aggregate the final signature.

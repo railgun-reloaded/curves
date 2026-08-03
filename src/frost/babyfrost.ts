@@ -92,7 +92,7 @@ class BabyFROST extends RailJubCurvePoint {
    */
   deriveInterpolatingValue (L: bigint[], x_i: bigint) {
     const found = L.find(a => { return a === x_i })
-    if (!found) throw new Error('invalid parameters')
+    if (found === undefined) throw new Error('invalid parameters')
     let num = 1n
     let dom = 1n
     for (const x_j of L) {
