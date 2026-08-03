@@ -140,3 +140,24 @@ describe('BabyFrost RFC9591 spec implementation', () => {
     assert(ok, 'validation failed')
   })
 })
+
+describe('BabyFROST deriveInterpolatingValue identifier validation', () => {
+  const f = new BabyFROST()
+
+  it('rejects identifier 0, the evaluation point of the shared secret', () => {
+    assert.throws(() => f.deriveInterpolatingValue([0n, 1n, 2n], 0n), /invalid parameters/)
+  })
+
+  it('rejects a signer set containing a non-positive identifier', () => {
+    assert.throws(() => f.deriveInterpolatingValue([0n, 1n, 2n], 1n), /invalid parameters/)
+    assert.throws(() => f.deriveInterpolatingValue([-1n, 1n, 2n], 1n), /invalid parameters/)
+  })
+
+  it('still rejects an identifier absent from the signer set', () => {
+    assert.throws(() => f.deriveInterpolatingValue([1n, 2n, 3n], 9n), /invalid parameters/)
+  })
+
+  it('accepts a valid positive identifier', () => {
+    assert.doesNotThrow(() => f.deriveInterpolatingValue([1n, 2n, 3n], 2n))
+  })
+})

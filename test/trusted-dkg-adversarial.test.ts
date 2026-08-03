@@ -121,3 +121,22 @@ describe('encrypted share transport (AES-GCM + AAD)', () => {
     assert.throws(() => dkg.decryptShareAESGCMWithAAD(short, key, 1, allCommitments), /bad ciphertext/)
   })
 })
+
+describe('TrustedDKG deriveInterpolatingValue identifier validation', () => {
+  it('rejects identifier 0, the evaluation point of the shared secret', () => {
+    assert.throws(() => dkg.deriveInterpolatingValue([0n, 1n, 2n], 0n), /invalid parameters/)
+  })
+
+  it('rejects a signer set containing a non-positive identifier', () => {
+    assert.throws(() => dkg.deriveInterpolatingValue([0n, 1n, 2n], 1n), /invalid parameters/)
+    assert.throws(() => dkg.deriveInterpolatingValue([-1n, 1n, 2n], 1n), /invalid parameters/)
+  })
+
+  it('still rejects an identifier absent from the signer set', () => {
+    assert.throws(() => dkg.deriveInterpolatingValue([1n, 2n, 3n], 9n), /invalid parameters/)
+  })
+
+  it('accepts a valid positive identifier', () => {
+    assert.doesNotThrow(() => dkg.deriveInterpolatingValue([1n, 2n, 3n], 2n))
+  })
+})

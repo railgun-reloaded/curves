@@ -91,6 +91,11 @@ class BabyFROST extends RailJubCurvePoint {
    * @returns The interpolation coefficient.
    */
   deriveInterpolatingValue (L: bigint[], x_i: bigint) {
+    // Identifier 0 is the point at which the polynomial evaluates to the shared
+    // secret itself, so it can never be a participant identifier. Reject it (and
+    // any other non-positive id) explicitly instead of relying on a falsy check
+    // to catch it by accident.
+    if (x_i <= 0n || L.some(a => a <= 0n)) throw new Error('invalid parameters')
     const found = L.find(a => { return a === x_i })
     if (found === undefined) throw new Error('invalid parameters')
     let num = 1n

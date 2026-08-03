@@ -161,6 +161,11 @@ class SigningSession {
    * @param commitment Remote participant commitment.
    */
   addRemoteSigner (commitment: Commitment) {
+    // Reject a peer announcing identifier 0: it would enter the commitment list
+    // and shift every honest signer's Lagrange coefficients.
+    if (commitment.identifier <= 0n) {
+      throw new Error(`invalid commitment identifier ${commitment.identifier}: participant identifiers must be positive integers`)
+    }
     const exists = this.remoteSigners.find(c => c.identifier === commitment.identifier)
     if (!exists) this.remoteSigners.push(commitment)
   }
@@ -399,6 +404,11 @@ class FROSTSigningManager {
    * @param signer Local signer share.
    */
   addSigner (signer: SignerShare) {
+    // A participant identifier of 0 would make this signer's share the shared
+    // secret itself; the interpolation rejects it, so refuse it at the door.
+    if (!Number.isInteger(signer.id) || signer.id <= 0) {
+      throw new Error(`invalid signer id ${signer.id}: participant identifiers must be positive integers`)
+    }
     if (this.signers.some(s => s.id === signer.id)) {
       throw new Error(`signer ${signer.id} already added`)
     }

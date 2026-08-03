@@ -77,4 +77,36 @@ describe('FROSTSigningManager flow guards', () => {
     a.addRemoteSigner(cb!)
     assert.equal(a.remoteSigners.length, 1)
   })
+
+  it('addSigner rejects non-positive and non-integer identifiers', () => {
+    // Identifier 0 is the evaluation point of the shared secret itself, so it
+    // can never be a participant id.
+    const sm = new FROSTSigningManager(pk, 3)
+    assert.throws(() => sm.addSigner({ id: 0, skShare: 5n }), /must be positive integers/)
+    assert.throws(() => sm.addSigner({ id: -1, skShare: 5n }), /must be positive integers/)
+    assert.throws(() => sm.addSigner({ id: 1.5, skShare: 5n }), /must be positive integers/)
+    assert.equal(sm.signers.length, 0)
+  })
+
+  it('addRemoteSigner rejects a peer announcing identifier 0', () => {
+    const a = mkSigner(0)
+    const b = mkSigner(1)
+    a.round1()
+    b.round1()
+    const [cb] = b.exportRound1()
+    const forged = { ...cb!, identifier: 0n }
+    assert.throws(() => a.addRemoteSigner(forged), /must be positive integers/)
+    assert.equal(a.remoteSigners.length, 0)
+  })
+
+  it('round1 discards partials received before this node committed', () => {
+    // receivePartials() has no ordering guard, so a partial can arrive before
+    // round1(). Such a partial cannot have been computed against a commitment
+    // list containing ours, so a fresh round must not aggregate it.
+    const a = mkSigner(0)
+    a.receivePartials([{ identifier: 2, partial: 123456789n }])
+    assert.equal(a.partialsById.size, 1)
+    a.round1()
+    assert.equal(a.partialsById.size, 0)
+  })
 })
