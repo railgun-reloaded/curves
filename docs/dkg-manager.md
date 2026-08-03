@@ -117,6 +117,25 @@ Validation and ordering
 - `addEncryptedShares` must be called for all dealers in roster.
 - `finalize` throws if any dealers are missing.
 
+## Migrating from a self-adding `commitmentRound`
+
+`commitmentRound` used to store its own commitments internally, so callers fed
+only their peers' commitments back in. It no longer does: every commitment now
+arrives through the single `addParticipantCommitments` path, including your own.
+
+A caller written against the older behaviour does not fail at the call site — it
+simply never reaches `commitments-collected`, because it is waiting on itself.
+Check `progress().awaitingCommitments`: if it contains your own
+`participantID`, add your own commitments:
+
+```ts
+const { shares, commitments } = dealer.commitmentRound(secret_i, n, t)
+dealer.addParticipantCommitments(dealer.participantID!, commitments) // <- now required
+```
+
+`getEncryptedShares` detects this case specifically and throws naming your own
+id rather than reporting a generic state error.
+
 ## Pause and resume
 
 A session can be persisted between any two steps and rebuilt later (e.g. across a

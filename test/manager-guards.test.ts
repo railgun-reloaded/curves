@@ -109,4 +109,26 @@ describe('FROSTSigningManager flow guards', () => {
     a.round1()
     assert.equal(a.partialsById.size, 0)
   })
+
+  it('getEncryptedShares names the self-commitment case instead of stalling', () => {
+    // commitmentRound() does not self-add. A caller written against the older
+    // self-adding behaviour would otherwise sit at commitments-created waiting
+    // on its own id with no indication why.
+    const secrets = [0x11n, 0x22n, 0x33n]
+    const dealers = secrets.map(() => new DKGManager('p'))
+    const roster: Record<number, Uint8Array> = {}
+    dealers.forEach((d, i) => { roster[i + 1] = d.getAnnouncement().pubKey })
+    dealers.forEach(d => d.assignRoster(roster))
+    const comms: Record<number, ReturnType<DKGManager['commitmentRound']>['commitments']> = {}
+    dealers.forEach((d, i) => { comms[i + 1] = d.commitmentRound(secrets[i]!, 3, 2).commitments })
+    // old caller pattern: feed in only the OTHER dealers' commitments
+    dealers.forEach((d, i) => {
+      for (const idStr of Object.keys(comms)) {
+        const id = Number(idStr)
+        if (id !== i + 1) d.addParticipantCommitments(id, comms[id]!)
+      }
+    })
+    assert.deepStrictEqual(dealers[0]!.progress().awaitingCommitments, [1])
+    assert.throws(() => dealers[0]!.getEncryptedShares(), /awaiting this participant's own commitments/)
+  })
 })

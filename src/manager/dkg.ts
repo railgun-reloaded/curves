@@ -512,6 +512,17 @@ class DKGManager {
    * @returns A per-recipient map of encrypted share payloads.
    */
   getEncryptedShares () {
+    // commitmentRound() does not self-add its own commitments; the caller feeds
+    // them back through addParticipantCommitments() like any peer's. A caller
+    // written against the older self-adding behaviour otherwise just stalls here
+    // waiting on itself, so name that case explicitly.
+    if (
+      typeof this.participantID !== 'undefined' &&
+      this.steps.selfCommitmentsCreated &&
+      !this.commitmentsByDealerId[this.participantID]
+    ) {
+      throw new Error(`getEncryptedShares is still awaiting this participant's own commitments (id ${this.participantID}); commitmentRound() does not self-add, feed its commitments back via addParticipantCommitments()`)
+    }
     // make sure the commitments are not empty, and same length as 'max participants'
     this.ensureStateIn('getEncryptedShares', [DKGFlowState.CommitmentsCollected])
     if (!Object.keys(this.shares).length) throw new Error('no local shares computed; run commitmentRound first')
