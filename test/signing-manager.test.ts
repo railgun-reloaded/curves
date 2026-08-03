@@ -315,7 +315,7 @@ describe('BabyFrost Signing Manager', () => {
     }
   })
 
-  it('survives a JSON snapshot/restore mid signing flow', () => {
+  it('survives a mid-round snapshot/restore mid signing flow', () => {
     let signers: FROSTSigningManager[] = []
     for (const v of multiSigVector) {
       const signer = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
@@ -335,7 +335,7 @@ describe('BabyFrost Signing Manager', () => {
     // rebuild from the parsed JSON — simulating a process restart mid-flow. The
     // restored managers must keep the SAME local nonces, or the partials they
     // produce won't match the commitments their peers already hold.
-    signers = signers.map((s) => FROSTSigningManager.fromJSON(JSON.parse(JSON.stringify(s))))
+    signers = signers.map((s) => FROSTSigningManager.fromMidRoundJSON(JSON.parse(JSON.stringify(s.toMidRoundJSON()))))
 
     // round 2 continues on the restored managers
     const partials = signers.map((s) => s.sign(message))
@@ -346,7 +346,47 @@ describe('BabyFrost Signing Manager', () => {
     assert(ok, 'signature from restored managers must verify')
 
     // a restored session reports its collected partials and stays finalizable
-    const reloaded = FROSTSigningManager.fromJSON(JSON.parse(JSON.stringify(signers[0])))
+    const reloaded = FROSTSigningManager.fromMidRoundJSON(JSON.parse(JSON.stringify(signers[0]!.toMidRoundJSON())))
     assert.equal(reloaded.readyToFinalize(), true)
+  })
+
+  it('the default snapshot carries no nonces and drops committed sessions', () => {
+    const v = multiSigVector[0]!
+    const m = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+    m.addSigner({ id: v.id, skShare: v.share.skShare })
+    m.startSession('pending')          // uncommitted: safe to carry
+    m.startSession('live').round1()    // committed: holds live nonces
+
+    const safe = JSON.parse(JSON.stringify(m))
+    assert.equal(safe.kind, 'safe')
+    assert.deepStrictEqual(safe.omittedSessions, ['live'])
+    assert.deepStrictEqual(safe.sessions.map((x: { id: string }) => x.id), ['pending'])
+    // no nonce material may appear anywhere in a safe payload
+    assert.equal(JSON.stringify(safe).includes('hidingNonce"'), false)
+    assert.equal(safe.sessions.every((x: { localBindings: unknown[] }) => x.localBindings.length === 0), true)
+  })
+
+  it('the mid-round snapshot keeps committed sessions and their nonces', () => {
+    const v = multiSigVector[0]!
+    const m = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+    m.addSigner({ id: v.id, skShare: v.share.skShare })
+    m.startSession('live').round1()
+
+    const mid = JSON.parse(JSON.stringify(m.toMidRoundJSON()))
+    assert.equal(mid.kind, 'mid-round')
+    assert.deepStrictEqual(mid.sessions.map((x: { id: string }) => x.id), ['live'])
+    assert.ok(mid.sessions[0].localBindings[0].nonces.hidingNonce)
+  })
+
+  it('the two restore paths refuse each other\'s snapshots', () => {
+    const v = multiSigVector[0]!
+    const m = new FROSTSigningManager(v.PKGroup as [bigint, bigint], 3)
+    m.addSigner({ id: v.id, skShare: v.share.skShare })
+    m.startSession('live').round1()
+
+    // a nonce-bearing payload must not restore through the safe entry point
+    assert.throws(() => FROSTSigningManager.fromJSON(m.toMidRoundJSON()), /mid-round snapshot and carries live nonces/)
+    // and the single-use entry point must not be fed a safe payload
+    assert.throws(() => FROSTSigningManager.fromMidRoundJSON(m.toJSON()), /expected a mid-round snapshot/)
   })
 })

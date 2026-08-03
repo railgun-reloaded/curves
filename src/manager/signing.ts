@@ -37,20 +37,35 @@ interface SigningSessionSnapshot {
 }
 
 /**
- * JSON-safe, resumable snapshot of a {@link FROSTSigningManager} and all its
- * sessions. NOTE: contains secret material (signer shares and local nonces);
- * treat it as secret.
+ * Which class of snapshot a payload is, so the two restore paths cannot be
+ * confused for one another.
+ *
+ * - `safe`: carries no live nonces. Restoring it any number of times is sound.
+ * - `mid-round`: carries the local nonces of committed sessions. **Single use.**
+ */
+type SnapshotKind = 'safe' | 'mid-round'
+
+/**
+ * JSON-safe snapshot of a {@link FROSTSigningManager} and its sessions.
+ *
+ * Both kinds contain secret material: `signers[].skShare` is long-term key
+ * material in either case, so a snapshot always belongs in trusted storage.
+ * The `kind` field distinguishes a further, sharper hazard — see
+ * {@link SnapshotKind} and {@link FROSTSigningManager#toMidRoundJSON}.
  */
 interface SigningManagerSnapshot {
   version: number
+  kind: SnapshotKind
   threshold: number
   groupPublicKey: HexPoint
   signers: Array<{ id: number; skShare: string }>
   sessions: SigningSessionSnapshot[]
+  /** Ids of committed sessions dropped from a `safe` snapshot, for diagnostics. */
+  omittedSessions?: string[]
 }
 
 const DEFAULT_SESSION = 'default'
-const SNAPSHOT_VERSION = 1
+const SNAPSHOT_VERSION = 2
 
 /**
  * Hex-encodes a bigint for a snapshot.
@@ -313,6 +328,17 @@ class SigningSession {
   }
 
   /**
+   * Whether this session has run round1 and therefore holds live local nonces.
+   *
+   * A committed session cannot appear in a `safe` manager snapshot, because
+   * serializing its nonces is what creates the single-use hazard.
+   * @returns `true` once round1() has run and before reset().
+   */
+  hasCommitted (): boolean {
+    return this.committed
+  }
+
+  /**
    * Serializes this session to a JSON-safe snapshot (includes secret nonces).
    * @returns The session snapshot.
    */
@@ -468,16 +494,51 @@ class FROSTSigningManager {
   // --- persistence ----------------------------------------------------------
 
   /**
-   * Serializes the manager and all live sessions to a JSON-safe snapshot for
-   * pause/resume across process restarts.
+   * Serializes the manager to a snapshot that carries no live nonces, and is
+   * therefore sound to restore any number of times.
    *
-   * The snapshot includes secret material (signer shares and local nonces);
-   * persist it only to trusted storage.
-   * @returns A versioned, hex-encoded snapshot suitable for JSON.stringify.
+   * Sessions that have already committed (run round1) hold local nonces, so
+   * they are **dropped**; their ids are listed in `omittedSessions`. To resume a
+   * committed session you need {@link FROSTSigningManager#toMidRoundJSON}, which
+   * carries a single-use hazard.
+   *
+   * The snapshot still contains `signers[].skShare` — long-term key material —
+   * so persist it only to trusted storage.
+   * @returns A versioned, hex-encoded `safe` snapshot suitable for JSON.stringify.
    */
   toJSON (): SigningManagerSnapshot {
+    const live = Array.from(this.sessions.values())
+    const resumable = live.filter((s) => !s.hasCommitted())
+    const omitted = live.filter((s) => s.hasCommitted()).map((s) => s.id)
     return {
       version: SNAPSHOT_VERSION,
+      kind: 'safe',
+      threshold: this.threshold,
+      groupPublicKey: pointToHex(this.groupPublicKey),
+      signers: this.signers.map((s) => ({ id: s.id, skShare: bigToHex(s.skShare) })),
+      sessions: resumable.map((s) => s.toSnapshot()),
+      ...(omitted.length ? { omittedSessions: omitted } : {}),
+    }
+  }
+
+  /**
+   * Serializes the manager including the local nonces of committed sessions, so
+   * a signing already past round 1 can be resumed and still produce partials
+   * that match the commitments peers hold.
+   *
+   * **This snapshot is single use.** The nonces it carries must sign at most one
+   * message. Restoring the same payload more than once and signing different
+   * messages reuses `(hidingNonce, bindingNonce)` across distinct challenges;
+   * enough such partials form a solvable linear system in the signer's secret
+   * share. Restoring twice is a key-compromise event even inside trusted
+   * storage, so the caller must mark the stored payload consumed *before*
+   * signing from it, and never fan it out to more than one process.
+   * @returns A versioned, hex-encoded `mid-round` snapshot. Treat as single use.
+   */
+  toMidRoundJSON (): SigningManagerSnapshot {
+    return {
+      version: SNAPSHOT_VERSION,
+      kind: 'mid-round',
       threshold: this.threshold,
       groupPublicKey: pointToHex(this.groupPublicKey),
       signers: this.signers.map((s) => ({ id: s.id, skShare: bigToHex(s.skShare) })),
@@ -486,13 +547,47 @@ class FROSTSigningManager {
   }
 
   /**
-   * Rebuilds a manager (and its sessions) from a snapshot produced by {@link FROSTSigningManager#toJSON}.
-   * @param snapshot A snapshot at the current SNAPSHOT_VERSION.
-   * @returns A manager restored to the snapshot's exact state.
+   * Rebuilds a manager from a `safe` snapshot produced by {@link FROSTSigningManager#toJSON}.
+   *
+   * Rejects a `mid-round` payload: restoring one is the single-use operation
+   * that must be spelled out at the call site.
+   * @param snapshot A `safe` snapshot at the current SNAPSHOT_VERSION.
+   * @returns A manager restored to the snapshot's state.
    */
   static fromJSON (snapshot: SigningManagerSnapshot): FROSTSigningManager {
+    if (snapshot?.kind === 'mid-round') {
+      throw new Error('this is a mid-round snapshot and carries live nonces; restore it with fromMidRoundJSON(), which must be used at most once per snapshot')
+    }
+    return FROSTSigningManager.restore(snapshot, 'safe')
+  }
+
+  /**
+   * Rebuilds a manager from a `mid-round` snapshot produced by
+   * {@link FROSTSigningManager#toMidRoundJSON}, including live nonces.
+   *
+   * **Use at most once per snapshot.** See `toMidRoundJSON` for why: a second
+   * restore that signs a different message reuses the nonces and can expose the
+   * signing share. Mark the stored payload consumed before calling this.
+   * @param snapshot A `mid-round` snapshot at the current SNAPSHOT_VERSION.
+   * @returns A manager restored to the snapshot's exact state, nonces included.
+   */
+  static fromMidRoundJSON (snapshot: SigningManagerSnapshot): FROSTSigningManager {
+    return FROSTSigningManager.restore(snapshot, 'mid-round')
+  }
+
+  /**
+   * Shared restore path for both snapshot kinds.
+   * @param snapshot Snapshot to rebuild from.
+   * @param expected Snapshot kind the caller has already validated.
+   * @returns The restored manager.
+   */
+  private static restore (snapshot: SigningManagerSnapshot, expected: SnapshotKind): FROSTSigningManager {
     if (!snapshot || snapshot.version !== SNAPSHOT_VERSION) {
       throw new Error(`unsupported signing snapshot version: ${snapshot?.version}`)
+    }
+    if (snapshot.kind !== expected) {
+      const use = expected === 'mid-round' ? 'fromJSON()' : 'fromMidRoundJSON()'
+      throw new Error(`expected a ${expected} snapshot, got kind '${snapshot.kind}'; restore that payload with ${use}`)
     }
     const manager = new FROSTSigningManager(hexToPoint(snapshot.groupPublicKey), snapshot.threshold)
     for (const s of snapshot.signers) manager.signers.push({ id: s.id, skShare: BigInt(s.skShare) })

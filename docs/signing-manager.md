@@ -35,30 +35,42 @@ A session is single-commit: calling `round1()` twice throws (`already committed`
 
 ### Pause and resume
 
-A signing manager and all of its sessions can be serialized between any two steps and rebuilt later (e.g. across a process restart). The restored manager keeps the **same local nonces**, so partials it produces still match the commitments peers already hold.
+A signing manager and its sessions can be serialized between steps and rebuilt later (e.g. across a process restart). There are two snapshot kinds, because resuming a signing that is already past round 1 carries a hazard that resuming one before round 1 does not.
 
-- `toJSON(): SigningManagerSnapshot` — versioned, JSON-serializable snapshot. **Contains secret material** (signer shares and local nonces); store only in trusted storage.
-- `static FROSTSigningManager.fromJSON(snapshot): FROSTSigningManager` — rebuild the manager and every session.
+Both kinds contain `signers[].skShare` — long-term key material — so either belongs only in trusted storage.
+
+#### `toJSON()` / `fromJSON()` — safe, restore as often as you like
+
+The default path, and what `JSON.stringify(manager)` produces. It carries no live nonces, so restoring the same payload any number of times is sound.
+
+Sessions that have already run `round1()` hold nonces, so they are **dropped** from this snapshot; their ids are listed in `omittedSessions`. What survives is the manager's durable identity (threshold, group public key, signer shares) plus any session that has not yet committed.
 
 ```ts
-// persist after exchanging commitments (treat the snapshot as secret)
-await store.put(id, JSON.stringify(manager))   // toJSON() is invoked by JSON.stringify
-
-// ...later, in a fresh process
+await store.put(id, JSON.stringify(manager))          // safe payload
 const restored = FROSTSigningManager.fromJSON(JSON.parse(await store.get(id)))
-const partials = restored.sign(message)        // continue the flow
 ```
 
+#### `toMidRoundJSON()` / `fromMidRoundJSON()` — single use
+
+Use this only to resume a signing already past round 1. It keeps each committed session's local nonces, which is what lets the restored manager produce partials that still match the commitments peers already hold.
+
+> **A mid-round snapshot must be restored at most once.**
+>
+> Its nonces may sign at most one message. Restore the same payload twice and sign different messages, and the same `(hidingNonce, bindingNonce)` pair is used under different challenges. FROST's binding factor means two such partials are not immediately solvable, but three distinct messages give three independent equations in three unknowns (`d_i`, `e_i`, `s_i`) — enough to recover the signer's secret share. This is a key-compromise event **even if the snapshot never leaves trusted storage**, because it is a use-count problem, not a confidentiality one.
+>
+> Mark the stored payload consumed *before* signing from it, and never hand the same payload to more than one process or retry.
+
 ```ts
-const a = manager.startSession('tx-42')
-a.round1()
-const myCommitments = a.exportRound1()      // route to peers' 'tx-42' sessions
-// ...collect peer commitments into a.addRemoteSigner(...)
-const partials = a.sign(messageA)            // route to peers' 'tx-42' sessions
-// ...collect peer partials into a.receivePartials(...)
-const sig = a.finalize(messageA)
-manager.endSession('tx-42')
+// pausing mid-round
+await store.putOnce(id, JSON.stringify(manager.toMidRoundJSON()))
+
+// resuming — consume first, then sign
+const raw = await store.takeOnce(id)                  // must not return twice
+const restored = FROSTSigningManager.fromMidRoundJSON(JSON.parse(raw))
+const partials = restored.sign(message)
 ```
+
+The two entry points refuse each other's payloads: `fromJSON()` throws on a `mid-round` snapshot, and `fromMidRoundJSON()` throws on a `safe` one, so the single-use path is always explicit at the call site.
 
 ## Minimal E2E usage (t-of-n)
 
