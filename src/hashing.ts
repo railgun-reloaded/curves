@@ -1,4 +1,4 @@
-import { blake2b } from '@noble/hashes/blake2.js'
+import { blake512 } from '@noble/hashes/blake1.js'
 import { concatBytes } from '@noble/hashes/utils.js'
 import type { Point } from '@zk-kit/baby-jubjub'
 import { poseidon5 } from 'poseidon-lite'
@@ -7,12 +7,15 @@ import { leBigIntToBuffer, leBufferToBigInt } from './bytes.js'
 
 type HashFn = (m: Uint8Array) => Uint8Array
 /**
- * Default base hash: BLAKE2b with a 64-byte digest length.
+ * Default base hash: BLAKE-512, the function named by the `-BLAKE512-v1`
+ * suffix of the ciphersuite string. This is the original BLAKE (SHA-3
+ * finalist), not BLAKE2b; `curve.ts` already uses the same function for
+ * EdDSA-Poseidon key derivation.
  * @param m Input bytes.
- * @returns The 64-byte BLAKE2b digest.
+ * @returns The 64-byte BLAKE-512 digest.
  */
-function blake2BWrapper (m: Uint8Array) {
-  return blake2b(m, { dkLen: 64 })
+function blake512Wrapper (m: Uint8Array) {
+  return blake512(m)
 }
 
 /**
@@ -36,7 +39,7 @@ class RFC9591Hasher {
    */
   constructor (contextString: string, order: bigint, hashFn?: HashFn) {
     this.contextString = contextString
-    this.hashFn = hashFn ?? blake2BWrapper
+    this.hashFn = hashFn ?? blake512Wrapper
     this.order = order
   }
 
