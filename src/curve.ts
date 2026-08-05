@@ -2,7 +2,7 @@
 import { blake512 } from '@noble/hashes/blake1.js'
 import { randomBytes } from '@noble/hashes/utils.js'
 import type { Point } from '@zk-kit/baby-jubjub'
-import { Base8, Fr as FrValue, mulPointEscalar, order, r, subOrder } from '@zk-kit/baby-jubjub'
+import { Base8, Fr as FrValue, inCurve, mulPointEscalar, order, r, subOrder } from '@zk-kit/baby-jubjub'
 
 import { leBigIntToBuffer, leBufferToBigInt } from './bytes.js'
 
@@ -298,6 +298,30 @@ class RailJubCurvePoint {
     if (!this.pointsEqual(check, this.identity)) throw new Error('DeserializeElement: not in prime-order subgroup')
 
     return P
+  }
+
+  /**
+   * Validates a point received from a peer as an already-decoded pair.
+   *
+   * `DeserializeElement` performs these checks on the wire encoding, but points
+   * that arrive as `Point<bigint>` (FROST nonce commitments, restored
+   * snapshots) never pass through it. The Edwards addition law is undefined off
+   * the curve, so an unvalidated point makes every subsequent operation
+   * meaningless rather than merely wrong.
+   * @param P Point to validate.
+   * @param label Context used in the thrown message.
+   * @throws If the point is off the curve, the identity, or outside the
+   * prime-order subgroup.
+   */
+  assertValidElement (P: Point<bigint> | undefined | null, label: string): void {
+    if (!P || P.length !== 2 || typeof P[0] !== 'bigint' || typeof P[1] !== 'bigint') {
+      throw new Error(`${label}: malformed point`)
+    }
+    if (!inCurve(P)) throw new Error(`${label}: point is not on the curve`)
+    if (this.pointsEqual(P, this.identity)) throw new Error(`${label}: point is identity`)
+    if (!this.pointsEqual(mulPointEscalar(P, this.order), this.identity)) {
+      throw new Error(`${label}: point is not in the prime-order subgroup`)
+    }
   }
 
   /**

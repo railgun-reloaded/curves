@@ -117,6 +117,11 @@ class BabyFROST extends RailJubCurvePoint {
   encodeGroupCommitmentList (commitmentList: Commitment[]) {
     let encodedGroupCommitment: Uint8Array = new Uint8Array()
     for (const { identifier, hidingNonceCommitment, bindingNonceCommitment } of commitmentList) {
+      // Entry point for consumers driving BabyFROST directly, without the
+      // signing manager: validate here so no unchecked peer point reaches the
+      // binding-factor preimage or the group commitment.
+      this.assertValidElement(hidingNonceCommitment, `commitment ${identifier}: hiding nonce`)
+      this.assertValidElement(bindingNonceCommitment, `commitment ${identifier}: binding nonce`)
       const encodedCommitment = concatBytes(
         this.SerializeScalar(identifier),
         this.SerializeElement(hidingNonceCommitment),

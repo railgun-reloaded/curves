@@ -95,16 +95,25 @@ const commitmentToSnapshot = (c: Commitment): CommitmentSnapshot => ({
   hidingNonceCommitment: pointToHex(c.hidingNonceCommitment),
   bindingNonceCommitment: pointToHex(c.bindingNonceCommitment),
 })
+/** Stateless curve helper used to validate points decoded from a snapshot. */
+const snapshotValidator = new BabyFROST()
 /**
- * Rebuilds a round-1 commitment from its snapshot form.
+ * Rebuilds a round-1 commitment from its snapshot form, validating its points.
  * @param s Commitment snapshot to decode.
  * @returns The decoded commitment.
  */
-const snapshotToCommitment = (s: CommitmentSnapshot): Commitment => ({
-  identifier: BigInt(s.identifier),
-  hidingNonceCommitment: hexToPoint(s.hidingNonceCommitment),
-  bindingNonceCommitment: hexToPoint(s.bindingNonceCommitment),
-})
+const snapshotToCommitment = (s: CommitmentSnapshot): Commitment => {
+  const identifier = BigInt(s.identifier)
+  if (identifier <= 0n) throw new Error(`invalid commitment identifier ${identifier} in snapshot`)
+  const hidingNonceCommitment = hexToPoint(s.hidingNonceCommitment)
+  const bindingNonceCommitment = hexToPoint(s.bindingNonceCommitment)
+  // A snapshot is untrusted input: it may have been written by a peer, edited
+  // on disk, or produced by an older build. Validate exactly as if the
+  // commitment had arrived over the wire.
+  snapshotValidator.assertValidElement(hidingNonceCommitment, `snapshot commitment ${identifier}: hiding nonce`)
+  snapshotValidator.assertValidElement(bindingNonceCommitment, `snapshot commitment ${identifier}: binding nonce`)
+  return { identifier, hidingNonceCommitment, bindingNonceCommitment }
+}
 
 /**
  * One isolated two-round FROST signing session (one message) owned by a
@@ -181,6 +190,12 @@ class SigningSession {
     if (commitment.identifier <= 0n) {
       throw new Error(`invalid commitment identifier ${commitment.identifier}: participant identifiers must be positive integers`)
     }
+    // Nonce commitments arrive as already-decoded points and never pass through
+    // DeserializeElement. Reject anything off the curve, the identity, or
+    // outside the prime-order subgroup, so a malformed peer is named here
+    // rather than surfacing later as an unattributable aggregate failure.
+    this.manager.frost.assertValidElement(commitment.hidingNonceCommitment, `commitment ${commitment.identifier}: hiding nonce`)
+    this.manager.frost.assertValidElement(commitment.bindingNonceCommitment, `commitment ${commitment.identifier}: binding nonce`)
     const exists = this.remoteSigners.find(c => c.identifier === commitment.identifier)
     if (!exists) this.remoteSigners.push(commitment)
   }
