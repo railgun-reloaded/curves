@@ -1,0 +1,17 @@
+node_modules
+*.js
+*.tsbuildinfo
+
+!eslint.config.js
+
+# repo initialization scripts
+setup
+immutable-tags.json
+protected-main.json
+
+# misc
+dist
+.vscode
+coverage
+
+local-distribution

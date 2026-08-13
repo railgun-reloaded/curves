@@ -1,0 +1,54 @@
+{
+  "name": "@railgun-reloaded/curves",
+  "version": "0.2.14",
+  "description": "Dependency light version of railgun curves functionality.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./babyfrost": "./src/frost/babyfrost.js",
+    "./trusted-dkg": "./src/frost/trusted-dkg.js",
+    "./manager": "./src/manager/index.js",
+    "./babyjubjub": "./src/babyjubjub.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "prepare": "tsc --build",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "pretest": "npm run build",
+    "test": "npm run build && node --test --enable-source-maps \"./test/*.test.js\"",
+    "coverage": "npm run build && c8 --clean --reporter=text --reporter=lcov --include='src/**/*.ts' --exclude='src/**/*.test.ts' node --test --enable-source-maps \"./test/*.test.js\"",
+    "pack:dev": "./pack.sh",
+    "prepack": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://git@github.com/railgun-reloaded/curves.git"
+  },
+  "keywords": [],
+  "author": "RAILGUN Project Contributors",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/railgun-reloaded/curves/issues"
+  },
+  "homepage": "https://github.com/railgun-reloaded/curves#readme",
+  "devDependencies": {
+    "@railgun-reloaded/eslint-config": "^1.1.0",
+    "@railgun-reloaded/tsconfig": "^1.2.0",
+    "@types/node": "^24.0.10",
+    "c8": "^10.1.3",
+    "eslint": "^9.24.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.3",
+    "@noble/ciphers": "^2.0.1",
+    "@noble/curves": "^2.0.1",
+    "@noble/ed25519": "^3.0.0",
+    "@noble/hashes": "^2.0.1",
+    "@railgun-reloaded/bytes": "git+https://github.com/railgun-reloaded/bytes.git#dev",
+    "poseidon-lite": "^0.3.0"
+  }
+}
