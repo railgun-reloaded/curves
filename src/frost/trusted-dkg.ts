@@ -3,9 +3,9 @@
 
 import { gcm } from '@noble/ciphers/aes.js'
 import { concatBytes, randomBytes } from '@noble/hashes/utils.js'
-import type { Point } from '@zk-kit/baby-jubjub'
-import { addPoint, mulPointEscalar } from '@zk-kit/baby-jubjub'
 
+import type { Point } from '../babyjubjub.js'
+import { addPoint, mulPointEscalar } from '../babyjubjub.js'
 import { RailJubCurvePoint } from '../curve.js'
 import { RFC9591Hasher } from '../hashing.js'
 

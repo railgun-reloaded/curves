@@ -2,8 +2,7 @@
 import assert from 'node:assert'
 import { describe, it } from 'node:test'
 
-import type { Point } from '@zk-kit/baby-jubjub'
-
+import type { Point } from '../src/babyjubjub.js'
 import { eddsaBuild } from '../src/eddsa/index.js'
 import { BabyFROST, TrustedDKG } from '../src/frost/index.js'
 // import { BabyFROST } from '../src/frost/babyfrost.js'

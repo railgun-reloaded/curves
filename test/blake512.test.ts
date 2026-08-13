@@ -4,8 +4,8 @@ import { describe, it } from 'node:test'
 import { blake512 } from '@noble/hashes/blake1.js'
 import { blake2b } from '@noble/hashes/blake2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
-import { subOrder } from '@zk-kit/baby-jubjub'
 
+import { subOrder } from '../src/babyjubjub.js'
 import { RFC9591Hasher } from '../src/hashing.js'
 
 const hasher = new RFC9591Hasher('FROST-EDBABYJUJUB-BLAKE512-v1', subOrder)

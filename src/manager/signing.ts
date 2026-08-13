@@ -1,5 +1,4 @@
-import type { Point } from '@zk-kit/baby-jubjub'
-
+import type { Point } from '../babyjubjub.js'
 import { bigIntToBuffer } from '../bytes.js'
 import { eddsaBuild } from '../eddsa/index.js'
 import { BabyFROST } from '../frost/index.js'

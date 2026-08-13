@@ -1,8 +1,7 @@
 import assert from 'node:assert'
 import { describe, it } from 'node:test'
 
-import { addPoint } from '@zk-kit/baby-jubjub'
-
+import { addPoint } from '../src/babyjubjub.js'
 import { RailJubCurvePoint } from '../src/curve.js'
 
 const c = new RailJubCurvePoint()

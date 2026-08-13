@@ -1,9 +1,9 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import { blake512 } from '@noble/hashes/blake1.js'
 import { randomBytes } from '@noble/hashes/utils.js'
-import type { Point } from '@zk-kit/baby-jubjub'
-import { Base8, Fr as FrValue, inCurve, mulPointEscalar, order, r, subOrder } from '@zk-kit/baby-jubjub'
 
+import type { Point } from './babyjubjub.js'
+import { Base8, Fr as FrValue, inCurve, mulPointEscalar, order, r, subOrder } from './babyjubjub.js'
 import { leBigIntToBuffer, leBufferToBigInt } from './bytes.js'
 
 type FrType = typeof FrValue

@@ -1,8 +1,7 @@
 import assert from 'node:assert'
 import { describe, it } from 'node:test'
 
-import { subOrder } from '@zk-kit/baby-jubjub'
-
+import { subOrder } from '../src/babyjubjub.js'
 import BabyFROST from '../src/frost/babyfrost.js'
 import type { Commitment, Point } from '../src/index.js'
 import { eddsaBuild, poseidonHex } from '../src/index.js'

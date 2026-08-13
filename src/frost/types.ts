@@ -1,4 +1,4 @@
-import type { Point } from '@zk-kit/baby-jubjub'
+import type { Point } from '../babyjubjub.js'
 
 /** Finalized signer share produced by DKG finalization. */
 interface Share {

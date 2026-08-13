@@ -2,8 +2,8 @@ import assert from 'node:assert'
 import { describe, it } from 'node:test'
 
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js'
-import { subOrder } from '@zk-kit/baby-jubjub'
 
+import { subOrder } from '../src/babyjubjub.js'
 import { RFC9591Hasher } from '../src/hashing.js'
 
 /**

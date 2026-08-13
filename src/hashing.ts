@@ -1,8 +1,8 @@
 import { blake512 } from '@noble/hashes/blake1.js'
 import { concatBytes } from '@noble/hashes/utils.js'
-import type { Point } from '@zk-kit/baby-jubjub'
 import { poseidon5 } from 'poseidon-lite'
 
+import type { Point } from './babyjubjub.js'
 import { leBigIntToBuffer, leBufferToBigInt } from './bytes.js'
 
 type HashFn = (m: Uint8Array) => Uint8Array

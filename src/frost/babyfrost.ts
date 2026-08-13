@@ -1,9 +1,9 @@
 /* eslint-disable camelcase, jsdoc/require-jsdoc */
 
 import { concatBytes } from '@noble/hashes/utils.js'
-import type { Point } from '@zk-kit/baby-jubjub'
-import { addPoint } from '@zk-kit/baby-jubjub'
 
+import type { Point } from '../babyjubjub.js'
+import { addPoint } from '../babyjubjub.js'
 import { RailJubCurvePoint } from '../curve.js'
 import { RFC9591Hasher } from '../hashing.js'
 

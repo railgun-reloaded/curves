@@ -1,8 +1,8 @@
 import { decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpack'
 import { getPublicKey } from '@noble/ed25519'
 import { bytesToBigInt, bytesToHex, hexToBytes } from '@railgun-reloaded/bytes'
-import type { Point } from '@zk-kit/baby-jubjub'
 
+import type { Point } from './babyjubjub.js'
 import { bigIntToBuffer, leBigIntToBuffer, leBufferToBigInt } from './bytes.js'
 import type { Signature } from './eddsa/babyposeidon.js'
 import { EddsaPoseidon, eddsaBuild } from './eddsa/index.js'

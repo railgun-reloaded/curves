@@ -1,9 +1,9 @@
 import { bytesToHex, concatBytes, hexToBytes } from '@noble/hashes/utils.js'
 import { bytesToBigInt } from '@railgun-reloaded/bytes'
-import type { Point } from '@zk-kit/baby-jubjub'
-import { Base8, addPoint, inCurve, mulPointEscalar, packPoint as packBabyPoint, subOrder, unpackPoint as unpackBabyPoint } from '@zk-kit/baby-jubjub'
 import { poseidon5 } from 'poseidon-lite'
 
+import type { Point } from '../babyjubjub.js'
+import { Base8, addPoint, inCurve, mulPointEscalar, packPoint as packBabyPoint, subOrder, unpackPoint as unpackBabyPoint } from '../babyjubjub.js'
 import { leBigIntToBuffer, leBufferToBigInt } from '../bytes.js'
 import { RailJubCurvePoint } from '../curve.js'
 

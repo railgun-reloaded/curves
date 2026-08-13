@@ -3,8 +3,8 @@ import {
 } from '@noble/curves/ed25519.js'
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js'
 import { bytesToBigInt } from '@railgun-reloaded/bytes'
-import type { Point } from '@zk-kit/baby-jubjub'
 
+import type { Point } from '../babyjubjub.js'
 import { TrustedDKG } from '../frost/trusted-dkg.js'
 import type { EncryptedShare } from '../frost/types.js'
 

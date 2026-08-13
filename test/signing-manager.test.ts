@@ -1,8 +1,7 @@
 import assert from 'node:assert'
 import { describe, it } from 'node:test'
 
-import { subOrder } from '@zk-kit/baby-jubjub'
-
+import { subOrder } from '../src/babyjubjub.js'
 import { eddsaBuild } from '../src/index.js'
 import { FROSTSigningManager } from '../src/manager/signing.js'
 

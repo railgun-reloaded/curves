@@ -77,7 +77,7 @@ The two entry points refuse each other's payloads: `fromJSON()` throws on a `mid
 ```ts
 import { FROSTSigningManager } from '../src/manager/signing'
 import { eddsaBuild } from '../src' // provides verifyPoseidon
-import { bigIntToBuffer } from '@zk-kit/utils'
+import { bigIntToBuffer } from '../src/bytes'
 
 const t = 3
 const groupPublicKey = /* Point<bigint> from DKG */

@@ -2,8 +2,8 @@ import assert from 'node:assert'
 import { describe, it } from 'node:test'
 
 import { randomBytes } from '@noble/hashes/utils.js'
-import { addPoint } from '@zk-kit/baby-jubjub'
 
+import { addPoint } from '../src/babyjubjub.js'
 import { TrustedDKG } from '../src/frost/trusted-dkg.js'
 
 const dkg = new TrustedDKG()

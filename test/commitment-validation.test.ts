@@ -1,9 +1,8 @@
 import assert from 'node:assert'
 import { describe, it } from 'node:test'
 
-import type { Point } from '@zk-kit/baby-jubjub'
-import { addPoint, inCurve, subOrder } from '@zk-kit/baby-jubjub'
-
+import type { Point } from '../src/babyjubjub.js'
+import { addPoint, inCurve, subOrder } from '../src/babyjubjub.js'
 import { BabyFROST } from '../src/frost/index.js'
 import type { Commitment } from '../src/frost/types.js'
 import { FROSTSigningManager } from '../src/manager/signing.js'
